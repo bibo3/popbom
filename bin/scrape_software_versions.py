@@ -9,12 +9,16 @@ regexes = {
     'Nextflow': ['v_nextflow.txt', r"(\S+)"],
     'FastQC': ['v_fastqc.txt', r"FastQC v(\S+)"],
     'MultiQC': ['v_multiqc.txt', r"multiqc, version (\S+)"],
+    'Fastp': ['v_fastp.txt', r"fastp (\S+)"],
+    'Kraken2': ['v_kraken2.txt', r"Kraken version (\S+)-beta"]
 }
 results = OrderedDict()
 results['nf-core/popbom'] = '<span style="color:#999999;\">N/A</span>'
 results['Nextflow'] = '<span style="color:#999999;\">N/A</span>'
 results['FastQC'] = '<span style="color:#999999;\">N/A</span>'
 results['MultiQC'] = '<span style="color:#999999;\">N/A</span>'
+results['fastp'] = '<span style="color:#999999;\">N/A</span>'
+results['Kraken2'] = '<span style="color:#999999;\">N/A</span>'
 
 # Search each file using its regex
 for k, v in regexes.items():

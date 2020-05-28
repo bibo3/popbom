@@ -29,6 +29,17 @@ def helpMessage() {
       --genome [str]                  Name of iGenomes reference
       --single_end [bool]             Specifies that the input is single-end reads
 
+
+    Short read preprocessing:
+      --adapter_forward             Sequence of 3' adapter to remove in the forward reads
+      --adapter_reverse             Sequence of 3' adapter to remove in the reverse reads
+      --mean_quality                Mean qualified quality value for keeping read (default: 15)
+      --trimming_quality            Trimming quality value for the sliding window (default: 15)
+      --keep_phix                   Keep reads similar to the Illumina internal standard PhiX genome (default: false)
+
+    Taxonomy:
+      --kraken2_db [path]           Database for taxonomic binning with kraken2 (default: none). E.g. "ftp://ftp.ccb.jhu.edu/pub/data/kraken2_dbs/minikraken2_v2_8GB_201904_UPDATE.tgz"
+
     References                        If not specified in the configuration file or you wish to overwrite any of the references
       --fasta [file]                  Path to fasta reference
 
@@ -56,10 +67,12 @@ if (params.help) {
  * SET UP CONFIGURATION VARIABLES
  */
 
+/*
 // Check if genome exists in the config file
 if (params.genomes && params.genome && !params.genomes.containsKey(params.genome)) {
     exit 1, "The provided genome '${params.genome}' is not available in the iGenomes file. Currently the available genomes are ${params.genomes.keySet().join(", ")}"
 }
+*/
 
 // TODO nf-core: Add any reference files that are needed
 // Configurable reference genomes
@@ -89,6 +102,25 @@ if (workflow.profile.contains('awsbatch')) {
     if (params.tracedir.startsWith('s3:')) exit 1, "Specify a local tracedir or run without trace! S3 cannot be used for tracefiles."
 }
 
+
+/*
+ * short read preprocessing options
+ */
+params.adapter_forward = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA"
+params.adapter_reverse = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT"
+params.mean_quality = 15
+params.trimming_quality = 15
+params.keep_phix = false
+// params.phix_reference = "ftp://ftp.ncbi.nlm.nih.gov/genomes/genbank/viral/Enterobacteria_phage_phiX174_sensu_lato/all_assembly_versions/GCA_002596845.1_ASM259684v1/GCA_002596845.1_ASM259684v1_genomic.fna.gz"
+params.phix_reference = "$baseDir/assets/data/GCA_002596845.1_ASM259684v1_genomic.fna.gz"
+
+/*
+ * taxonomy options
+ */
+params.kraken2_db = false
+
+
+
 // Stage config files
 ch_multiqc_config = file("$baseDir/assets/multiqc_config.yaml", checkIfExists: true)
 ch_multiqc_custom_config = params.multiqc_config ? Channel.fromPath(params.multiqc_config, checkIfExists: true) : Channel.empty()
@@ -97,6 +129,45 @@ ch_output_docs = file("$baseDir/docs/output.md", checkIfExists: true)
 /*
  * Create a channel for input read files
  */
+
+if(params.kraken2_db){
+    Channel
+            .fromPath( "${params.kraken2_db}", checkIfExists: true )
+            .set { file_kraken2_db }
+} else {
+    file_kraken2_db = Channel.from()
+}
+
+if(!params.keep_phix) {
+    Channel
+            .fromPath( "${params.phix_reference}", checkIfExists: true )
+            .set { file_phix_db }
+}
+
+if(params.readPaths){
+    if(params.singleEnd){
+        Channel
+                .from(params.readPaths)
+                .map { row -> [ row[0], [file(row[1][0])]] }
+                .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
+                .into { read_files_fastqc; read_files_fastp }
+        files_all_raw = Channel.from()
+    } else {
+        Channel
+                .from(params.readPaths)
+                .map { row -> [ row[0], [file(row[1][0]), file(row[1][1])]] }
+                .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
+                .into { read_files_fastqc; read_files_fastp }
+        files_all_raw = Channel.from()
+    }
+} else {
+    Channel
+            .fromFilePairs( params.reads, size: params.singleEnd ? 1 : 2 )
+            .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nNB: Path requires at least one * wildcard!\nIf this is single-end data, please specify --singleEnd on the command line." }
+            .into { read_files_fastqc; read_files_fastp }
+    files_all_raw = Channel.from()
+}
+/*
 if (params.readPaths) {
     if (params.single_end) {
         Channel
@@ -117,6 +188,7 @@ if (params.readPaths) {
         .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nIf this is single-end data, please specify --single_end on the command line." }
         .into { ch_read_files_fastqc; ch_read_files_trimming }
 }
+*/
 
 // Header log info
 log.info nfcoreHeader()
@@ -127,6 +199,7 @@ summary['Run Name']         = custom_runName ?: workflow.runName
 summary['Reads']            = params.reads
 summary['Fasta Ref']        = params.fasta
 summary['Data Type']        = params.single_end ? 'Single-End' : 'Paired-End'
+if(params.kraken2_db) summary['Kraken2 Db']         = params.kraken2_db
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
 summary['Output dir']       = params.outdir
@@ -191,13 +264,184 @@ process get_software_versions {
     echo $workflow.nextflow.version > v_nextflow.txt
     fastqc --version > v_fastqc.txt
     multiqc --version > v_multiqc.txt
+    fastp -v 2> v_fastp.txt
+    kraken2 -v > v_kraken2.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
 
 /*
+ * STEP 1 - Read trimming and pre/post qc
+ */
+process fastqc_raw {
+    tag "$name"
+    publishDir "${params.outdir}/", mode: 'copy',
+            saveAs: {filename -> filename.indexOf(".zip") == -1 ? "QC_shortreads/fastqc/$filename" : null}
+
+    input:
+    set val(name), file(reads) from read_files_fastqc
+
+    output:
+    file "*_fastqc.{zip,html}" into fastqc_results
+
+    script:
+    """
+    fastqc -t "${task.cpus}" -q $reads
+    """
+}
+
+
+process fastp {
+    tag "$name"
+    publishDir "${params.outdir}/", mode: 'copy',
+            saveAs: {filename -> filename.indexOf(".fastq.gz") == -1 ? "QC_shortreads/fastp/$name/$filename" : null}
+
+    input:
+    set val(name), file(reads) from read_files_fastp
+    val adapter from params.adapter_forward
+    val adapter_reverse from params.adapter_reverse
+    val qual from params.mean_quality
+    val trim_qual from params.trimming_quality
+
+    output:
+    set val(name), file("${name}_trimmed*.fastq.gz") into trimmed_reads
+    file("fastp.*")
+
+    script:
+    def pe_input = params.singleEnd ? '' :  "-I \"${reads[1]}\""
+    def pe_output1 = params.singleEnd ? "-o \"${name}_trimmed.fastq.gz\"" :  "-o \"${name}_trimmed_R1.fastq.gz\""
+    def pe_output2 = params.singleEnd ? '' :  "-O \"${name}_trimmed_R2.fastq.gz\""
+    """
+    fastp -w "${task.cpus}" -q "${qual}" --cut_by_quality5 \
+        --cut_by_quality3 --cut_mean_quality "${trim_qual}"\
+        --adapter_sequence=${adapter} --adapter_sequence_r2=${adapter_reverse} \
+        -i "${reads[0]}" $pe_input $pe_output1 $pe_output2
+    """
+}
+
+/*
+ * Remove PhiX contamination from Illumina reads
+ * TODO: PhiX into/from iGenomes.conf?
+ */
+if(!params.keep_phix) {
+    process phix_download_db {
+        tag "${genome}"
+
+        input:
+        file(genome) from file_phix_db
+
+        output:
+        set file(genome), file("ref*") into phix_db
+
+        script:
+        """
+        bowtie2-build --threads "${task.cpus}" "${genome}" ref
+        """
+    }
+
+    process remove_phix {
+        tag "$name"
+
+        publishDir "${params.outdir}", mode: 'copy',
+                saveAs: {filename -> filename.indexOf(".fastq.gz") == -1 ? "QC_shortreads/remove_phix/$filename" : null}
+
+        input:
+        set val(name), file(reads), file(genome), file(db) from trimmed_reads.combine(phix_db)
+
+        output:
+        set val(name), file("*.fastq.gz") into (trimmed_reads_megahit, trimmed_reads_metabat, trimmed_reads_fastqc, trimmed_sr_spadeshybrid, trimmed_reads_spades, trimmed_reads_centrifuge, trimmed_reads_kraken2, trimmed_reads_bowtie2)
+        file("${name}_remove_phix_log.txt")
+
+        script:
+        if ( !params.singleEnd ) {
+            """
+            bowtie2 -p "${task.cpus}" -x ref -1 "${reads[0]}" -2 "${reads[1]}" --un-conc-gz ${name}_unmapped_%.fastq.gz
+            echo "Bowtie2 reference: ${genome}" >${name}_remove_phix_log.txt
+            zcat ${reads[0]} | echo "Read pairs before removal: \$((`wc -l`/4))" >>${name}_remove_phix_log.txt
+            zcat ${name}_unmapped_1.fastq.gz | echo "Read pairs after removal: \$((`wc -l`/4))" >>${name}_remove_phix_log.txt
+            """
+        } else {
+            """
+            bowtie2 -p "${task.cpus}" -x ref -U ${reads}  --un-gz ${name}_unmapped.fastq.gz
+            echo "Bowtie2 reference: ${genome}" >${name}_remove_phix_log.txt
+            zcat ${reads[0]} | echo "Reads before removal: \$((`wc -l`/4))" >>${name}_remove_phix_log.txt
+            zcat ${name}_unmapped.fastq.gz | echo "Reads after removal: \$((`wc -l`/4))" >>${name}_remove_phix_log.txt
+            """
+        }
+
+    }
+} else {
+    trimmed_reads.into {trimmed_reads_megahit; trimmed_reads_metabat; trimmed_reads_fastqc; trimmed_sr_spadeshybrid; trimmed_reads_spades; trimmed_reads_centrifuge}
+}
+
+
+process fastqc_trimmed {
+    tag "$name"
+    publishDir "${params.outdir}/", mode: 'copy',
+            saveAs: {filename -> filename.indexOf(".zip") == -1 ? "QC_shortreads/fastqc/$filename" : null}
+
+    input:
+    set val(name), file(reads) from trimmed_reads_fastqc
+
+    output:
+    file "*_fastqc.{zip,html}" into fastqc_results_trimmed
+
+    script:
+    """
+    fastqc -t "${task.cpus}" -q ${reads}
+    """
+}
+
+
+process kraken2_db_preparation {
+    input:
+    file(db) from file_kraken2_db
+
+    output:
+    set val("${db.baseName}"), file("${db.baseName}/*.k2d") into kraken2_database
+
+    script:
+    """
+    tar -xf "${db}"
+    """
+}
+
+trimmed_reads_kraken2
+        .combine(kraken2_database)
+        .set { kraken2_input }
+
+process kraken2 {
+    tag "${name}-${db_name}"
+    publishDir "${params.outdir}/Taxonomy/kraken2/${name}", mode: 'copy',
+            saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+
+    input:
+    set val(name), file(reads), val(db_name), file("database/*") from kraken2_input
+
+    output:
+    set val("kraken2"), val(name), file("results.krona") into kraken2_to_krona
+    file("kraken2_report.txt")
+
+    script:
+    def input = params.singleEnd ? "\"${reads}\"" :  "--paired \"${reads[0]}\" \"${reads[1]}\""
+    """
+    kraken2 \
+        --report-zero-counts \
+        --threads "${task.cpus}" \
+        --db database \
+        --fastq-input \
+        --report kraken2_report.txt \
+        $input \
+        > kraken2.kraken
+    cat kraken2.kraken | cut -f 2,3 > results.krona
+    """
+}
+
+
+/*
  * STEP 1 - FastQC
  */
+/*
 process fastqc {
     tag "$name"
     label 'process_medium'
@@ -217,6 +461,7 @@ process fastqc {
     fastqc --quiet --threads $task.cpus $reads
     """
 }
+*/
 
 /*
  * STEP 2 - MultiQC
@@ -228,7 +473,7 @@ process multiqc {
     file (multiqc_config) from ch_multiqc_config
     file (mqc_custom_config) from ch_multiqc_custom_config.collect().ifEmpty([])
     // TODO nf-core: Add in log files from your new processes for MultiQC to find!
-    file ('fastqc/*') from ch_fastqc_results.collect().ifEmpty([])
+    file ('fastqc/*') from fastqc_results.collect().ifEmpty([])
     file ('software_versions/*') from ch_software_versions_yaml.collect()
     file workflow_summary from ch_workflow_summary.collectFile(name: "workflow_summary_mqc.yaml")
 

@@ -6,7 +6,7 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - conda-forge::python=3.7.3
+  - conda-forge::python=3.6.7
   - conda-forge::markdown=3.1.1
   - conda-forge::pymdown-extensions=6.0
   - conda-forge::pygments=2.5.2
@@ -14,6 +14,8 @@ dependencies:
   - bioconda::fastqc=0.11.8
   - bioconda::multiqc=1.7
 
-  - fastp=0.20.0
-  - bowtie2=2.3.5
-  - kraken2=2.0.8_beta
+  - bioconda::fastp=0.20.0
+  - bioconda::bowtie2=2.3.5
+  - bioconda::kraken2=2.0.8_beta
+  - bioconda::centrifuge=1.0.4_beta
+#  - bioconda::metaphlan=3.0

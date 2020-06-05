@@ -117,6 +117,7 @@ params.phix_reference = "$baseDir/assets/data/GCA_002596845.1_ASM259684v1_genomi
 /*
  * taxonomy options
  */
+params.centrifuge_db = false
 params.kraken2_db = false
 
 
@@ -129,6 +130,13 @@ ch_output_docs = file("$baseDir/docs/output.md", checkIfExists: true)
 /*
  * Create a channel for input read files
  */
+if(params.centrifuge_db){
+    Channel
+            .fromPath( "${params.centrifuge_db}", checkIfExists: true )
+            .set { file_centrifuge_db }
+} else {
+    file_centrifuge_db = Channel.from()
+}
 
 if(params.kraken2_db){
     Channel
@@ -167,28 +175,7 @@ if(params.readPaths){
             .into { read_files_fastqc; read_files_fastp }
     files_all_raw = Channel.from()
 }
-/*
-if (params.readPaths) {
-    if (params.single_end) {
-        Channel
-            .from(params.readPaths)
-            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true) ] ] }
-            .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
-            .into { ch_read_files_fastqc; ch_read_files_trimming }
-    } else {
-        Channel
-            .from(params.readPaths)
-            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true), file(row[1][1], checkIfExists: true) ] ] }
-            .ifEmpty { exit 1, "params.readPaths was empty - no input files supplied" }
-            .into { ch_read_files_fastqc; ch_read_files_trimming }
-    }
-} else {
-    Channel
-        .fromFilePairs(params.reads, size: params.single_end ? 1 : 2)
-        .ifEmpty { exit 1, "Cannot find any reads matching: ${params.reads}\nNB: Path needs to be enclosed in quotes!\nIf this is single-end data, please specify --single_end on the command line." }
-        .into { ch_read_files_fastqc; ch_read_files_trimming }
-}
-*/
+
 
 // Header log info
 log.info nfcoreHeader()
@@ -266,9 +253,12 @@ process get_software_versions {
     multiqc --version > v_multiqc.txt
     fastp -v 2> v_fastp.txt
     kraken2 -v > v_kraken2.txt
+    centrifuge --version > v_centrifuge.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
+
+//    metaphlan -v > v_metaphlan2.txt
 
 /*
  * STEP 1 - Read trimming and pre/post qc
@@ -393,12 +383,56 @@ process fastqc_trimmed {
 }
 
 
+process centrifuge_db_preparation {
+    input:
+    file(db) from file_centrifuge_db
+
+    output:
+    set val("${db.toString().replace(".tar.gz", "")}"), file("*.cf") into centrifuge_database
+
+    script:
+    """
+    tar -xf "${db}"
+    """
+}
+
+trimmed_reads_centrifuge
+        .combine(centrifuge_database)
+        .set { centrifuge_input }
+
+process centrifuge {
+    tag "${name}-${db_name}"
+    publishDir "${params.outdir}/Taxonomy/centrifuge/${name}", mode: 'copy',
+            saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+
+    input:
+    set val(name), file(reads), val(db_name), file(db) from centrifuge_input
+
+    output:
+    set val("centrifuge"), val(name), file("results.krona") into centrifuge_to_krona
+    file("report.txt")
+    file("kreport.txt")
+
+    script:
+    def input = params.singleEnd ? "-U \"${reads}\"" :  "-1 \"${reads[0]}\" -2 \"${reads[1]}\""
+    """
+    centrifuge -x "${db_name}" \
+        -p "${task.cpus}" \
+        --report-file report.txt \
+        -S results.txt \
+        $input
+    centrifuge-kreport -x "${db_name}" results.txt > kreport.txt
+    cat results.txt | cut -f 1,3 > results.krona
+    """
+}
+
+
 process kraken2_db_preparation {
     input:
     file(db) from file_kraken2_db
 
     output:
-    set val("${db.baseName}"), file("${db.baseName}/*.k2d") into kraken2_database
+    set val("${db.baseName}"), file("${db.baseName}*/*.k2d") into kraken2_database
 
     script:
     """
@@ -439,32 +473,7 @@ process kraken2 {
 
 
 /*
- * STEP 1 - FastQC
- */
-/*
-process fastqc {
-    tag "$name"
-    label 'process_medium'
-    publishDir "${params.outdir}/fastqc", mode: 'copy',
-        saveAs: { filename ->
-                      filename.indexOf(".zip") > 0 ? "zips/$filename" : "$filename"
-                }
-
-    input:
-    set val(name), file(reads) from ch_read_files_fastqc
-
-    output:
-    file "*_fastqc.{zip,html}" into ch_fastqc_results
-
-    script:
-    """
-    fastqc --quiet --threads $task.cpus $reads
-    """
-}
-*/
-
-/*
- * STEP 2 - MultiQC
+ * MultiQC
  */
 process multiqc {
     publishDir "${params.outdir}/MultiQC", mode: 'copy'
@@ -493,7 +502,7 @@ process multiqc {
 }
 
 /*
- * STEP 3 - Output Description HTML
+ * Output Description HTML
  */
 process output_documentation {
     publishDir "${params.outdir}/pipeline_info", mode: 'copy'
@@ -543,7 +552,7 @@ workflow.onComplete {
     email_fields['summary']['Nextflow Build'] = workflow.nextflow.build
     email_fields['summary']['Nextflow Compile Timestamp'] = workflow.nextflow.timestamp
 
-    // TODO nf-core: If not using MultiQC, strip out this code (including params.max_multiqc_email_size)
+
     // On success try attach the multiqc report
     def mqc_report = null
     try {

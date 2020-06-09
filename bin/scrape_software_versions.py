@@ -11,10 +11,9 @@ regexes = {
     'MultiQC': ['v_multiqc.txt', r"multiqc, version (\S+)"],
     'Fastp': ['v_fastp.txt', r"fastp (\S+)"],
     'Kraken2': ['v_kraken2.txt', r"Kraken version (\S+)-beta"],
-    'Centrifuge': ['v_centrifuge.txt', r"centrifuge-class version (\S+)"]
-    }
-#    'MetaPhlAn2' : ['v_metaphlan2.txt', r"MetaPhlAn2 version (\S+)"]
-#}
+    'Centrifuge': ['v_centrifuge.txt', r"centrifuge-class version (\S+)"],
+    'MetaPhlAn' : ['v_metaphlan.txt', r"MetaPhlAn2 version (\S+)"]
+}
 results = OrderedDict()
 results['nf-core/popbom'] = '<span style="color:#999999;\">N/A</span>'
 results['Nextflow'] = '<span style="color:#999999;\">N/A</span>'
@@ -23,7 +22,7 @@ results['MultiQC'] = '<span style="color:#999999;\">N/A</span>'
 results['fastp'] = '<span style="color:#999999;\">N/A</span>'
 results['Kraken2'] = '<span style="color:#999999;\">N/A</span>'
 results['Centrifuge'] = '<span style="color:#999999;\">N/A</span>'
-#results['MetaPhlAn'] = '<span style="color:#999999;\">N/A</span>'
+results['MetaPhlAn'] = '<span style="color:#999999;\">N/A</span>'
 
 # Search each file using its regex
 for k, v in regexes.items():

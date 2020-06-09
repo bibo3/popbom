@@ -119,7 +119,8 @@ params.phix_reference = "$baseDir/assets/data/GCA_002596845.1_ASM259684v1_genomi
  */
 params.centrifuge_db = false
 params.kraken2_db = false
-
+params.metaphlan_db = false
+params.metaphlan_read_min_len = 20
 
 
 // Stage config files
@@ -144,6 +145,14 @@ if(params.kraken2_db){
             .set { file_kraken2_db }
 } else {
     file_kraken2_db = Channel.from()
+}
+
+if(params.metaphlan_db){
+    Channel
+            .fromPath( "${params.metaphlan_db}", checkIfExists: true )
+            .set { file_metaphlan_db }
+} else {
+    file_metaphlan_db = Channel.from()
 }
 
 if(!params.keep_phix) {
@@ -254,11 +263,11 @@ process get_software_versions {
     fastp -v 2> v_fastp.txt
     kraken2 -v > v_kraken2.txt
     centrifuge --version > v_centrifuge.txt
+    metaphlan -v > v_metaphlan.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
 
-//    metaphlan -v > v_metaphlan2.txt
 
 /*
  * STEP 1 - Read trimming and pre/post qc
@@ -339,7 +348,7 @@ if(!params.keep_phix) {
         set val(name), file(reads), file(genome), file(db) from trimmed_reads.combine(phix_db)
 
         output:
-        set val(name), file("*.fastq.gz") into (trimmed_reads_megahit, trimmed_reads_metabat, trimmed_reads_fastqc, trimmed_sr_spadeshybrid, trimmed_reads_spades, trimmed_reads_centrifuge, trimmed_reads_kraken2, trimmed_reads_bowtie2)
+        set val(name), file("*.fastq.gz") into (trimmed_reads_megahit, trimmed_reads_metabat, trimmed_reads_fastqc, trimmed_sr_spadeshybrid, trimmed_reads_spades, trimmed_reads_centrifuge, trimmed_reads_kraken2, trimmed_reads_bowtie2, trimmed_reads_metaphlan)
         file("${name}_remove_phix_log.txt")
 
         script:
@@ -361,7 +370,7 @@ if(!params.keep_phix) {
 
     }
 } else {
-    trimmed_reads.into {trimmed_reads_megahit; trimmed_reads_metabat; trimmed_reads_fastqc; trimmed_sr_spadeshybrid; trimmed_reads_spades; trimmed_reads_centrifuge}
+    trimmed_reads.into {trimmed_reads_megahit; trimmed_reads_metabat; trimmed_reads_fastqc; trimmed_sr_spadeshybrid; trimmed_reads_spades; trimmed_reads_centrifuge; trimmed_reads_metaphlan}
 }
 
 
@@ -468,6 +477,57 @@ process kraken2 {
         $input \
         > kraken2.kraken
     cat kraken2.kraken | cut -f 2,3 > results.krona
+    """
+}
+
+
+
+
+process metaphlan_db_preparation {
+    input:
+    path(db) from file_metaphlan_db
+
+    output:
+    set val("${db.baseName}"), path(db) into metaphlan_database
+
+    script:
+        """
+        metaphlan --install --bowtie2db "${db}"
+        """
+}
+
+trimmed_reads_metaphlan
+        .combine(metaphlan_database)
+        .set { metaphlan_input }
+
+
+process metaphlan {
+    tag "${name}-${db_name}"
+    publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy',
+            saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+
+    input:
+    set val(name), file(reads), val(db_name), file(db) from metaphlan_input
+    val metaphlan_read_min_len from params.metaphlan_read_min_len
+
+    output:
+    set val("metaphlan"), val(name), file("results.krona") into metaphlan_to_krona
+    file("metaphlan_report.txt")
+    file("mapping.bt2")
+
+    script:
+    def input = params.singleEnd ? "\"${reads}\"" :  "\"${reads[0]}\",\"${reads[1]}\""
+    """
+    metaphlan \
+        $input \
+        --input_type fastq \
+        --bowtie2db "${db}" \
+        --bowtie2out mapping.bt2 \
+        --nproc "${task.cpus}" \
+        --read_min_len "${metaphlan_read_min_len}" \
+        -o metaphlan_report.txt
+
+    cat metaphlan_report.txt | cut -f 2,3 > results.krona
     """
 }
 

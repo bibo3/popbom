@@ -20,11 +20,11 @@ jobs:
           wget -qO- get.nextflow.io | bash
           sudo mv nextflow /usr/local/bin/
       - name: Pull docker image
-        run: |
-          docker pull nfcore/popbom:dev
-          docker tag nfcore/popbom:dev nfcore/popbom:dev
+          run: |
+          docker pull matt91/popbom:latest
+          docker tag matt91/popbom:latest matt91/popbom:latest
       - name: Run pipeline with test data
         run: |
           # TODO nf-core: You can customise CI pipeline run tests as required
           # (eg. adding multiple test runs with different parameters)
-          nextflow run ${GITHUB_WORKSPACE} -profile test,docker
+          #nextflow run ${GITHUB_WORKSPACE} -profile test,docker

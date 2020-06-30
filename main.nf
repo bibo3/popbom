@@ -38,7 +38,9 @@ def helpMessage() {
       --keep_phix                   Keep reads similar to the Illumina internal standard PhiX genome (default: false)
 
     Taxonomy:
+      --centrifuge_db [path]        Database for taxonomic binning with centrifuge (default: none). E.g. "ftp://ftp.ccb.jhu.edu/pub/infphilo/centrifuge/data/p_compressed+h+v.tar.gz"
       --kraken2_db [path]           Database for taxonomic binning with kraken2 (default: none). E.g. "ftp://ftp.ccb.jhu.edu/pub/data/kraken2_dbs/minikraken2_v2_8GB_201904_UPDATE.tgz"
+      --metaphlan_db [path]         Database for taxonomic binning with metaphlan
 
     References                        If not specified in the configuration file or you wish to overwrite any of the references
       --fasta [file]                  Path to fasta reference
@@ -195,6 +197,7 @@ summary['Run Name']         = custom_runName ?: workflow.runName
 summary['Reads']            = params.reads
 summary['Fasta Ref']        = params.fasta
 summary['Data Type']        = params.single_end ? 'Single-End' : 'Paired-End'
+if(params.centrifuge_db) summary['Centrifuge Db']         = params.centrifuge_db
 if(params.kraken2_db) summary['Kraken2 Db']         = params.kraken2_db
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
@@ -348,7 +351,7 @@ if(!params.keep_phix) {
         set val(name), file(reads), file(genome), file(db) from trimmed_reads.combine(phix_db)
 
         output:
-        set val(name), file("*.fastq.gz") into (trimmed_reads_megahit, trimmed_reads_metabat, trimmed_reads_fastqc, trimmed_sr_spadeshybrid, trimmed_reads_spades, trimmed_reads_centrifuge, trimmed_reads_kraken2, trimmed_reads_bowtie2, trimmed_reads_metaphlan)
+        set val(name), file("*.fastq.gz") into (trimmed_reads_fastqc, trimmed_reads_centrifuge, trimmed_reads_kraken2, trimmed_reads_bowtie2, trimmed_reads_metaphlan)
         file("${name}_remove_phix_log.txt")
 
         script:
@@ -370,7 +373,7 @@ if(!params.keep_phix) {
 
     }
 } else {
-    trimmed_reads.into {trimmed_reads_megahit; trimmed_reads_metabat; trimmed_reads_fastqc; trimmed_sr_spadeshybrid; trimmed_reads_spades; trimmed_reads_centrifuge; trimmed_reads_metaphlan}
+    trimmed_reads.into {trimmed_reads_fastqc; trimmed_reads_centrifuge; trimmed_reads_kraken2; trimmed_reads_metaphlan}
 }
 
 
@@ -511,7 +514,6 @@ process metaphlan {
     val metaphlan_read_min_len from params.metaphlan_read_min_len
 
     output:
-    set val("metaphlan"), val(name), file("results.krona") into metaphlan_to_krona
     file("metaphlan_report.txt")
     file("mapping.bt2")
 
@@ -526,8 +528,6 @@ process metaphlan {
         --nproc "${task.cpus}" \
         --read_min_len "${metaphlan_read_min_len}" \
         -o metaphlan_report.txt
-
-    cat metaphlan_report.txt | cut -f 2,3 > results.krona
     """
 }
 

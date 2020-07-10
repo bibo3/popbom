@@ -154,7 +154,7 @@ if(params.metaphlan_db){
             .fromPath( "${params.metaphlan_db}", checkIfExists: true )
             .set { file_metaphlan_db }
 } else {
-    file_metaphlan_db = Channel.from()
+    file_metaphlan_db = Channel.fromPath("./mpa_db")
 }
 
 if(!params.keep_phix) {
@@ -310,15 +310,29 @@ process fastp {
     file("fastp.*")
 
     script:
-    def pe_input = params.singleEnd ? '' :  "-I \"${reads[1]}\""
-    def pe_output1 = params.singleEnd ? "-o \"${name}_trimmed.fastq.gz\"" :  "-o \"${name}_trimmed_R1.fastq.gz\""
-    def pe_output2 = params.singleEnd ? '' :  "-O \"${name}_trimmed_R2.fastq.gz\""
-    """
-    fastp -w "${task.cpus}" -q "${qual}" --cut_by_quality5 \
-        --cut_by_quality3 --cut_mean_quality "${trim_qual}"\
-        --adapter_sequence=${adapter} --adapter_sequence_r2=${adapter_reverse} \
-        -i "${reads[0]}" $pe_input $pe_output1 $pe_output2
-    """
+    if ( !params.singleEnd ) {
+        """
+            fastp -w "${task.cpus}" -q "${qual}" --cut_by_quality5 \
+            --cut_by_quality3 --cut_mean_quality "${trim_qual}"\
+            --adapter_sequence=${adapter} --adapter_sequence_r2=${adapter_reverse} \
+            -i "${reads[0]}" \
+            --stdout | pigz -p \"${task.cpus}\" --best > \"${name}_trimmed.fastq.gz\"
+            """
+    } else {
+        """
+            fastp -w "${task.cpus}" -q "${qual}" --cut_by_quality5 \
+            --cut_by_quality3 --cut_mean_quality "${trim_qual}"\
+            --adapter_sequence=${adapter} --adapter_sequence_r2=${adapter_reverse} \
+            -i "${reads[0]}" -I "${reads[1]}" \
+            --stdout | \
+            paste - - - - - - - - | tee >( \
+            cut -f 1-4 | tr "\t" "\n" | egrep -v '^\$' | \
+            pigz -p \"${task.cpus}\" --best  > \"${name}_trimmed_R1.fastq.gz\"\
+            ) | \
+            cut -f 5-8 | tr "\t" "\n" | egrep -v '^\$' | \
+            pigz -p \"${task.cpus}\" --best  > \"${name}_trimmed_R2.fastq.gz\"
+            """
+    }
 }
 
 /*

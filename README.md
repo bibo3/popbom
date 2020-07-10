@@ -1,6 +1,6 @@
 # ![nf-core/popbom](docs/images/nf-core-popbom_logo.png)
 
-**A pipeline which performs prediction of phenotype based on microbiom**.
+**A pipeline which performs prediction of phenotype based on microbiome**.
 
 [![GitHub Actions CI Status](https://github.com/nf-core/popbom/workflows/nf-core%20CI/badge.svg)](https://github.com/nf-core/popbom/actions)
 [![GitHub Actions Linting Status](https://github.com/nf-core/popbom/workflows/nf-core%20linting/badge.svg)](https://github.com/nf-core/popbom/actions)

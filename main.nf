@@ -310,7 +310,7 @@ process fastp {
     file("fastp.*")
 
     script:
-    if ( !params.singleEnd ) {
+    if ( params.singleEnd ) {
         """
             fastp -w "${task.cpus}" -q "${qual}" --cut_by_quality5 \
             --cut_by_quality3 --cut_mean_quality "${trim_qual}"\

@@ -77,15 +77,6 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
 */
 
 // TODO nf-core: Add any reference files that are needed
-// Configurable reference genomes
-//
-// NOTE - THIS IS NOT USED IN THIS PIPELINE, EXAMPLE ONLY
-// If you want to use the channel below in a process, define the following:
-//   input:
-//   file fasta from ch_fasta
-//
-params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
-if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
@@ -119,8 +110,11 @@ params.phix_reference = "$baseDir/assets/data/GCA_002596845.1_ASM259684v1_genomi
 /*
  * taxonomy options
  */
+params.skip_centrifuge = false
 params.centrifuge_db = false
+params.skip_kraken2 = false
 params.kraken2_db = false
+params.skip_metaphlan = false
 params.metaphlan_db = false
 params.metaphlan_read_min_len = 20
 
@@ -133,29 +127,6 @@ ch_output_docs = file("$baseDir/docs/output.md", checkIfExists: true)
 /*
  * Create a channel for input read files
  */
-if(params.centrifuge_db){
-    Channel
-            .fromPath( "${params.centrifuge_db}", checkIfExists: true )
-            .set { file_centrifuge_db }
-} else {
-    file_centrifuge_db = Channel.from()
-}
-
-if(params.kraken2_db){
-    Channel
-            .fromPath( "${params.kraken2_db}", checkIfExists: true )
-            .set { file_kraken2_db }
-} else {
-    file_kraken2_db = Channel.from()
-}
-
-if(params.metaphlan_db){
-    Channel
-            .fromPath( "${params.metaphlan_db}", checkIfExists: true )
-            .set { file_metaphlan_db }
-} else {
-    file_metaphlan_db = Channel.fromPath("./mpa_db")
-}
 
 if(!params.keep_phix) {
     Channel
@@ -197,8 +168,21 @@ summary['Run Name']         = custom_runName ?: workflow.runName
 summary['Reads']            = params.reads
 summary['Fasta Ref']        = params.fasta
 summary['Data Type']        = params.single_end ? 'Single-End' : 'Paired-End'
-if(params.centrifuge_db) summary['Centrifuge Db']         = params.centrifuge_db
-if(params.kraken2_db) summary['Kraken2 Db']         = params.kraken2_db
+if (!params.skip_centrifuge) {
+    if(params.centrifuge_db) summary['Centrifuge Db']         = params.centrifuge_db
+} else {
+    summary['Skip Centrifuge'] = 'Yes'
+}
+if (!params.skip_kraken2) {
+    if(params.kraken2_db) summary['Kraken2 Db']         = params.kraken2_db
+} else {
+    summary['Skip kraken2'] = 'Yes'
+}
+if (!params.skip_metaphlan) {
+    if(params.metaphlan_db) summary['Metaphlan Db']         = params.metaphlan_db
+} else {
+    summary['Skip Metaphlan'] = 'Yes'
+}
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
 summary['Output dir']       = params.outdir
@@ -408,143 +392,186 @@ process fastqc_trimmed {
     """
 }
 
+// TODO rewrite channel io
+if ( !params.skip_centrifuge ) {
+        process centrifuge_db_preparation {
+            input:
+            file(db) from file_centrifuge_db
 
-process centrifuge_db_preparation {
-    input:
-    file(db) from file_centrifuge_db
+            output:
+            set val("${db.toString().replace(".tar.gz", "")}"), file("*.cf") into centrifuge_database
 
-    output:
-    set val("${db.toString().replace(".tar.gz", "")}"), file("*.cf") into centrifuge_database
+            script:
+            """
+            tar -xf "${db}"
+            """
+    }
 
-    script:
-    """
-    tar -xf "${db}"
-    """
+
+    trimmed_reads_centrifuge
+            .combine(centrifuge_database)
+            .set { centrifuge_input }
+
+    process centrifuge {
+        tag "${name}-${db_name}"
+        publishDir "${params.outdir}/Taxonomy/centrifuge/${name}", mode: 'copy',
+                saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+
+        input:
+        set val(name), file(reads), val(db_name), file(db) from centrifuge_input
+
+        output:
+        set val("centrifuge"), val(name), file("results.krona") into centrifuge_to_krona
+        file("report.txt")
+        file("kreport.txt")skip_kraken2
+
+        script:
+        def input = params.singleEnd ? "-U \"${reads}\"" :  "-1 \"${reads[0]}\" -2 \"${reads[1]}\""
+        """
+        centrifuge -x "${db_name}" \
+            -p "${task.cpus}" \
+            --report-file report.txt \
+            -S results.txt \
+            $input
+        centrifuge-kreport -x "${db_name}" results.txt > kreport.txt
+        cat results.txt | cut -f 1,3 > results.krona
+        """
+    }
+
 }
 
-trimmed_reads_centrifuge
-        .combine(centrifuge_database)
-        .set { centrifuge_input }
+// PREPROCESSING: uncompressing kraken2 db
 
-process centrifuge {
-    tag "${name}-${db_name}"
-    publishDir "${params.outdir}/Taxonomy/centrifuge/${name}", mode: 'copy',
-            saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+if ( !params.skip_kraken2 && params.kraken2_db ) {
+    file(params.kraken2_db, checkIfExists: true)
+    if (params.kraken2_db.endsWith('.tar.gz') || params.kraken2_db.endsWith('.tgz')) {
+        process UNTAR_KRAKEN2_DB {
+            label 'error_retry'
+            if (params.save_reference) {
+                publishDir "${params.outdir}/genome", mode: params.publish_dir_mode
+            }
 
-    input:
-    set val(name), file(reads), val(db_name), file(db) from centrifuge_input
+            input:
+            path db from params.kraken2_db
 
-    output:
-    set val("centrifuge"), val(name), file("results.krona") into centrifuge_to_krona
-    file("report.txt")
-    file("kreport.txt")
+            output:
+            path "$untar" into ch_kraken2_db
 
-    script:
-    def input = params.singleEnd ? "-U \"${reads}\"" :  "-1 \"${reads[0]}\" -2 \"${reads[1]}\""
-    """
-    centrifuge -x "${db_name}" \
-        -p "${task.cpus}" \
-        --report-file report.txt \
-        -S results.txt \
-        $input
-    centrifuge-kreport -x "${db_name}" results.txt > kreport.txt
-    cat results.txt | cut -f 1,3 > results.krona
-    """
-}
-
-
-process kraken2_db_preparation {
-    input:
-    file(db) from file_kraken2_db
-
-    output:
-    set val("${db.baseName}"), file("${db.baseName}*/*.k2d") into kraken2_database
-
-    script:
-    """
-    tar -xf "${db}"
-    """
-}
-
-trimmed_reads_kraken2
-        .combine(kraken2_database)
-        .set { kraken2_input }
-
-process kraken2 {
-    tag "${name}-${db_name}"
-    publishDir "${params.outdir}/Taxonomy/kraken2/${name}", mode: 'copy',
-            saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
-
-    input:
-    set val(name), file(reads), val(db_name), file("database/*") from kraken2_input
-
-    output:
-    set val("kraken2"), val(name), file("results.krona") into kraken2_to_krona
-    file("kraken2_report.txt")
-
-    script:
-    def input = params.singleEnd ? "\"${reads}\"" :  "--paired \"${reads[0]}\" \"${reads[1]}\""
-    """
-    kraken2 \
-        --report-zero-counts \
-        --threads "${task.cpus}" \
-        --db database \
-        --fastq-input \
-        --report kraken2_report.txt \
-        $input \
-        > kraken2.kraken
-    cat kraken2.kraken | cut -f 2,3 > results.krona
-    """
+            script:
+            untar = params.kraken2_db.tokenize("/")[-1].tokenize(".")[0]
+            """
+            tar -xvf $db
+            """
+        }
+    } else {
+        ch_kraken2_db = file(params.kraken2_db)
+    }
 }
 
 
+// PREPROCESSING: Build Kraken2 db
 
+//if ( !isOffline() ) {
+    if ( !params.skip_kraken2 && !params.kraken2_db ) {
 
-process metaphlan_db_preparation {
-    input:
-    path(db) from file_metaphlan_db
+        process KRAKEN2_BUILD {
+            tag "$db"
+            label 'process_high'
+            if (params.save_reference) {
+                publishDir "${params.outdir}/genome", mode: params.publish_dir_mode
+            }
 
-    output:
-    set val("${db.baseName}"), path(db) into metaphlan_database
+            output:
+            path "$db" into ch_kraken2_db
 
-    script:
+            script:
+            db = "kraken2_db"
+            ftp = params.kraken2_use_ftp ? "--use-ftp" : ""
+            """
+            kraken2-build --standard --db $db --threads $task.cpus $ftp
+            """
+        }
+    }
+/*    
+} else {
+    exit 1, "NXF_OFFLINE=true or -offline has been set so cannot download files required to build Kraken2 database!"
+}
+*/
+
+if ( !params.skip_kraken2 ) {
+    process kraken2 {
+        tag "${name}-${db_name}"
+        publishDir "${params.outdir}/Taxonomy/kraken2/${name}", mode: 'copy',
+                saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+
+        input:
+        tuple val(name), file(reads) from trimmed_reads_kraken2
+        path kraken2_db from ch_kraken2_db
+
+        output:
+        set val("kraken2"), val(name), file("results.krona") into kraken2_to_krona
+        file("kraken2_report.txt")
+
+        script:
+        def input = params.singleEnd ? "\"${reads}\"" :  "--paired \"${reads[0]}\" \"${reads[1]}\""
+        """
+        kraken2 \
+            --report-zero-counts \
+            --threads "${task.cpus}" \
+            --db "${kraken2_db}" \
+            --report kraken2_report.txt \
+            $input \
+            > kraken2.kraken
+        cat kraken2.kraken | cut -f 2,3 > results.krona
+        """
+    }
+}
+
+if ( !params.skip_metaphlan && !params.metaphlan_db ) {
+    process metaphlan_db_preparation {
+        
+        output:
+        path "$db" into ch_metaphlan_db
+
+        script:
+        db = "metaphlan_db"
         """
         metaphlan --install --bowtie2db "${db}"
         """
+    }
+} else {
+    ch_metaphlan_db = Channel.fromPath(params.metaphlan_db)
 }
 
-trimmed_reads_metaphlan
-        .combine(metaphlan_database)
-        .set { metaphlan_input }
+if ( !params.skip_metaphlan ) {
+    process metaphlan {
+        tag "${name}-${db_name}"
+        publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy',
+                saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
 
+        input:
+        set val(name), file(reads) from trimmed_reads_metaphlan
+        path db from ch_metaphlan_db
+        val metaphlan_read_min_len from params.metaphlan_read_min_len
 
-process metaphlan {
-    tag "${name}-${db_name}"
-    publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy',
-            saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+        output:
+        file("metaphlan_report.txt")
+        file("mapping.bt2")
 
-    input:
-    set val(name), file(reads), val(db_name), file(db) from metaphlan_input
-    val metaphlan_read_min_len from params.metaphlan_read_min_len
-
-    output:
-    file("metaphlan_report.txt")
-    file("mapping.bt2")
-
-    script:
-    def input = params.singleEnd ? "\"${reads}\"" :  "\"${reads[0]}\",\"${reads[1]}\""
-    """
-    metaphlan \
-        $input \
-        --input_type fastq \
-        --bowtie2db "${db}" \
-        --bowtie2out mapping.bt2 \
-        --nproc "${task.cpus}" \
-        --read_min_len "${metaphlan_read_min_len}" \
-        -o metaphlan_report.txt
-    """
+        script:
+        def input = params.singleEnd ? "\"${reads}\"" :  "\"${reads[0]}\",\"${reads[1]}\""
+        """
+        metaphlan \
+            $input \
+            --input_type fastq \
+            --bowtie2db "${db}" \
+            --bowtie2out mapping.bt2 \
+            --nproc "${task.cpus}" \
+            --read_min_len "${metaphlan_read_min_len}" \
+            -o metaphlan_report.txt
+        """
+    }
 }
-
 
 /*
  * MultiQC
@@ -556,7 +583,9 @@ process multiqc {
     file (multiqc_config) from ch_multiqc_config
     file (mqc_custom_config) from ch_multiqc_custom_config.collect().ifEmpty([])
     // TODO nf-core: Add in log files from your new processes for MultiQC to find!
-    file ('fastqc/*') from fastqc_results.collect().ifEmpty([])
+    file (fastqc_raw:'fastqc/*') from fastqc_results.collect().ifEmpty([])
+    file (fastqc_trimmed:'fastqc/*') from fastqc_results_trimmed.collect().ifEmpty([])
+//    file (host_removal) from ch_host_removed_log.collect().ifEmpty([])
     file ('software_versions/*') from ch_software_versions_yaml.collect()
     file workflow_summary from ch_workflow_summary.collectFile(name: "workflow_summary_mqc.yaml")
 
@@ -569,7 +598,7 @@ process multiqc {
     rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
     rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
     custom_config_file = params.multiqc_config ? "--config $mqc_custom_config" : ''
-    // TODO nf-core: Specify which MultiQC modules to use with -m for a faster run time
+
     """
     multiqc -f $rtitle $rfilename $custom_config_file .
     """

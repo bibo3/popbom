@@ -396,7 +396,7 @@ process fastqc_trimmed {
 if ( !params.skip_centrifuge ) {
         process centrifuge_db_preparation {
             input:
-            file(db) from file_centrifuge_db
+            file(db) from centrifuge_db
 
             output:
             set val("${db.toString().replace(".tar.gz", "")}"), file("*.cf") into centrifuge_database
@@ -444,7 +444,7 @@ if ( !params.skip_centrifuge ) {
 
 if ( !params.skip_kraken2 && params.kraken2_db ) {
     file(params.kraken2_db, checkIfExists: true)
-    if (params.kraken2_db.endsWith('.tar.gz') || params.kraken2_db.endsWith('.tgz')) {
+	    if (params.kraken2_db.endsWith('.tar.gz') || params.kraken2_db.endsWith('.tgz')) {
         process UNTAR_KRAKEN2_DB {
             label 'error_retry'
             if (params.save_reference) {
@@ -455,12 +455,12 @@ if ( !params.skip_kraken2 && params.kraken2_db ) {
             path db from params.kraken2_db
 
             output:
-            path "$untar" into ch_kraken2_db
+            file("$dbname*") into ch_kraken2_db
 
             script:
-            untar = params.kraken2_db.tokenize("/")[-1].tokenize(".")[0]
+	    dbname = params.kraken2_db.tokenize("/")[-1].tokenize(".")[0]
             """
-            tar -xvf $db
+            tar -xvzf $db
             """
         }
     } else {
@@ -468,10 +468,8 @@ if ( !params.skip_kraken2 && params.kraken2_db ) {
     }
 }
 
-
 // PREPROCESSING: Build Kraken2 db
 
-//if ( !isOffline() ) {
     if ( !params.skip_kraken2 && !params.kraken2_db ) {
 
         process KRAKEN2_BUILD {
@@ -492,11 +490,6 @@ if ( !params.skip_kraken2 && params.kraken2_db ) {
             """
         }
     }
-/*    
-} else {
-    exit 1, "NXF_OFFLINE=true or -offline has been set so cannot download files required to build Kraken2 database!"
-}
-*/
 
 if ( !params.skip_kraken2 ) {
     process kraken2 {
@@ -506,7 +499,7 @@ if ( !params.skip_kraken2 ) {
 
         input:
         tuple val(name), file(reads) from trimmed_reads_kraken2
-        path kraken2_db from ch_kraken2_db
+        file(kraken2_db) from ch_kraken2_db
 
         output:
         set val("kraken2"), val(name), file("results.krona") into kraken2_to_krona
@@ -518,7 +511,7 @@ if ( !params.skip_kraken2 ) {
         kraken2 \
             --report-zero-counts \
             --threads "${task.cpus}" \
-            --db "${kraken2_db}" \
+            --db "${kraken2_db}"  \
             --report kraken2_report.txt \
             $input \
             > kraken2.kraken

@@ -1,10 +1,9 @@
 # You can use this file to create a conda environment for this pipeline:
 #   conda env create -f environment.yml
-name: nf-core-popbom-1.0dev
+name: nf-core-popbom-mpa-1.0dev
 channels:
   - conda-forge
   - bioconda
   - defaults
 dependencies:
-  - conda-forge::python=3.8.3
   - bioconda::metaphlan=3.0.1

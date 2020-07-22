@@ -18,5 +18,4 @@ dependencies:
   - bioconda::bowtie2=2.3.5
   - bioconda::kraken2=2.0.8_beta
   - bioconda::centrifuge=1.0.4_beta
-  - bioconda::metaphlan=3.0 # TODO update to 3.0.1, will need python 3.7
   - conda-forge::pigz=2.3.4

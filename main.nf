@@ -349,7 +349,7 @@ if(!params.keep_phix) {
         set val(name), file(reads), file(genome), file(db) from trimmed_reads.combine(phix_db)
 
         output:
-        set val(name), file("*.fastq.gz") into (trimmed_reads_fastqc, trimmed_reads_centrifuge, trimmed_reads_kraken2, trimmed_reads_bowtie2, trimmed_reads_metaphlan)
+        set val(name), file("*.fastq.gz") into (trimmed_reads_fastqc, trimmed_reads_centrifuge, trimmed_reads_kraken2, trimmed_reads_metaphlan)
         file("${name}_remove_phix_log.txt")
 
         script:
@@ -423,7 +423,7 @@ if ( !params.skip_centrifuge ) {
         output:
         set val("centrifuge"), val(name), file("results.krona") into centrifuge_to_krona
         file("report.txt")
-        file("kreport.txt")skip_kraken2
+        file("kreport.txt")
 
         script:
         def input = params.singleEnd ? "-U \"${reads}\"" :  "-1 \"${reads[0]}\" -2 \"${reads[1]}\""
@@ -442,7 +442,8 @@ if ( !params.skip_centrifuge ) {
 
 // PREPROCESSING: uncompressing kraken2 db
 
-if ( !params.skip_kraken2 && params.kraken2_db ) {
+if ( !params.skip_kraken2) {
+	if ( params.kraken2_db ) {
     file(params.kraken2_db, checkIfExists: true)
 	    if (params.kraken2_db.endsWith('.tar.gz') || params.kraken2_db.endsWith('.tgz')) {
         process UNTAR_KRAKEN2_DB {
@@ -470,7 +471,7 @@ if ( !params.skip_kraken2 && params.kraken2_db ) {
 
 // PREPROCESSING: Build Kraken2 db
 
-    if ( !params.skip_kraken2 && !params.kraken2_db ) {
+    if ( !params.kraken2_db ) {
 
         process KRAKEN2_BUILD {
             tag "$db"
@@ -490,10 +491,8 @@ if ( !params.skip_kraken2 && params.kraken2_db ) {
             """
         }
     }
-
-if ( !params.skip_kraken2 ) {
     process kraken2 {
-        tag "${name}-${db_name}"
+        tag "${name}"
         publishDir "${params.outdir}/Taxonomy/kraken2/${name}", mode: 'copy',
                 saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
 
@@ -520,7 +519,8 @@ if ( !params.skip_kraken2 ) {
     }
 }
 
-if ( !params.skip_metaphlan && !params.metaphlan_db ) {
+if ( !params.skip_metaphlan) {
+	if ( !params.metaphlan_db ) {
     process metaphlan_db_preparation {
         
         output:
@@ -536,16 +536,19 @@ if ( !params.skip_metaphlan && !params.metaphlan_db ) {
     ch_metaphlan_db = Channel.fromPath(params.metaphlan_db)
 }
 
-if ( !params.skip_metaphlan ) {
+    trimmed_reads_metaphlan
+            .combine(ch_metaphlan_db)
+            .set { ch_metaphlan_input }
+
+
     process metaphlan {
-        tag "${name}-${db_name}"
+        tag "${name}"
         publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy',
                 saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
 
         input:
-        set val(name), file(reads) from trimmed_reads_metaphlan
-        path db from ch_metaphlan_db
-        val metaphlan_read_min_len from params.metaphlan_read_min_len
+        tuple val(name), file(reads), file(db) from ch_metaphlan_input
+        val(metaphlan_read_min_len) from params.metaphlan_read_min_len
 
         output:
         file("metaphlan_report.txt")

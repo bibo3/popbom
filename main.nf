@@ -118,6 +118,48 @@ params.skip_metaphlan = false
 params.metaphlan_db = false
 params.metaphlan_read_min_len = 20
 
+/*
+ * Check if parameters for host contamination removal are valid and create channels
+ */
+if ( params.host_fasta && params.host_genome) {
+    exit 1, "Both host fasta reference and iGenomes genome are specififed to remove host contamination! Invalid combination, please specify either --host_fasta or --host_genome."
+}
+if ( params.manifest && (params.host_fasta || params.host_genome) ) {
+    log.warn "Host read removal is only applied to short reads. Long reads might be filtered indirectly by Filtlong, which is set to use read qualities estimated based on k-mer matches to the short, already filtered reads."
+    if ( params.longreads_length_weight > 1 ) {
+        log.warn "The parameter --longreads_length_weight is ${params.longreads_length_weight}, causing the read length being more important for long read filtering than the read quality. Set --longreads_length_weight to 1 in order to assign equal weights."
+    }
+}
+
+if ( params.host_genome ) {
+    // Check if host genome exists in the config file
+    if ( !params.genomes.containsKey(params.host_genome) ) {
+        exit 1, "The provided host genome '${params.host_genome}' is not available in the iGenomes file. Currently the available genomes are ${params.genomes.keySet().join(", ")}"
+    } else {
+        host_fasta = params.genomes[params.host_genome].fasta ?: false
+        if ( !host_fasta ) {
+            exit 1, "No fasta file specified for the host genome ${params.host_genome}!"
+        }
+        Channel
+            .value(file( "${host_fasta}", checkIfExists: true ))
+            .set { ch_host_fasta }
+
+        host_bowtie2index = params.genomes[params.host_genome].bowtie2 ?: false
+        if ( !host_bowtie2index ) {
+            exit 1, "No Bowtie 2 index file specified for the host genome ${params.host_genome}!"
+        }
+        Channel
+            .value(file( "${host_bowtie2index}/*", checkIfExists: true ))
+            .set { ch_host_bowtie2index }
+    }
+} else if ( params.host_fasta ) {
+    Channel
+        .value(file( "${params.host_fasta}", checkIfExists: true ))
+        .set { ch_host_fasta }
+} else {
+    ch_host_fasta = Channel.empty()
+}
+
 
 // Stage config files
 ch_multiqc_config = file("$baseDir/assets/multiqc_config.yaml", checkIfExists: true)
@@ -319,6 +361,91 @@ process fastp {
     }
 }
 
+
+/*
+ * Remove host read contamination
+ */
+(trimmed_reads, ch_trimmed_reads_remove_host) = trimmed_reads.into(2)
+
+process host_bowtie2index {
+    tag "${genome}"
+
+    input:
+    file(genome) from ch_host_fasta
+
+    output:
+    file("bt2_index_base*") into ch_host_bowtie2index
+
+    when: params.host_fasta
+
+    script:
+    """
+    bowtie2-build --threads "${task.cpus}" "${genome}" "bt2_index_base"
+    """
+}
+
+process remove_host {
+    tag "${name}"
+
+    publishDir "${params.outdir}/QC_shortreads/remove_host/", mode: params.publish_dir_mode,
+        saveAs: {filename ->
+                    if (filename.indexOf(".fastq.gz") == -1) "$filename"
+                    else null
+                }
+
+    input:
+    set val(name), file(reads) from ch_trimmed_reads_remove_host
+    file(index) from ch_host_bowtie2index
+
+    output:
+    set val(name), file("${name}_host_unmapped*.fastq.gz") into ch_trimmed_reads_host_removed
+    file("${name}.bowtie2.log") into ch_host_removed_log
+    file("${name}_host_mapped*.read_ids.txt") optional true
+
+    when: params.host_fasta || params.host_genome
+
+    script:
+    def sensitivity = params.host_removal_verysensitive ? "--very-sensitive" : "--sensitive"
+    def save_ids = params.host_removal_save_ids ? "Y" : "N"
+    if ( !params.single_end ) {
+        """
+        bowtie2 -p "${task.cpus}" \
+                -x ${index[0].getSimpleName()} \
+                -1 "${reads[0]}" -2 "${reads[1]}" \
+                $sensitivity \
+                --un-conc-gz ${name}_host_unmapped_%.fastq.gz \
+                --al-conc-gz ${name}_host_mapped_%.fastq.gz \
+                1> /dev/null \
+                2> ${name}.bowtie2.log
+        if [ ${save_ids} = "Y" ] ; then
+            zcat ${name}_host_mapped_1.fastq.gz | awk '{if(NR%4==1) print substr(\$0, 2)}' | LC_ALL=C sort > ${name}_host_mapped_1.read_ids.txt
+            zcat ${name}_host_mapped_2.fastq.gz | awk '{if(NR%4==1) print substr(\$0, 2)}' | LC_ALL=C sort > ${name}_host_mapped_2.read_ids.txt
+        fi
+        rm -f ${name}_host_mapped_*.fastq.gz
+        """
+    } else {
+        """
+        bowtie2 -p "${task.cpus}" \
+                -x ${index[0].getSimpleName()} \
+                -U ${reads} \
+                $sensitivity \
+                --un-gz ${name}_host_unmapped.fastq.gz \
+                --al-gz ${name}_host_mapped.fastq.gz \
+                1> /dev/null \
+                2> ${name}.bowtie2.log
+        if [ ${save_ids} = "Y" ] ; then
+            zcat ${name}_host_mapped.fastq.gz | awk '{if(NR%4==1) print substr(\$0, 2)}' | LC_ALL=C sort > ${name}_host_mapped.read_ids.txt
+        fi
+        rm -f ${name}_host_mapped.fastq.gz
+        """
+    }
+}
+
+if ( params.host_fasta || params.host_genome ) trimmed_reads = ch_trimmed_reads_host_removed
+else ch_trimmed_reads_remove_host.close()
+
+
+
 /*
  * Remove PhiX contamination from Illumina reads
  * TODO: PhiX into/from iGenomes.conf?
@@ -387,9 +514,21 @@ process fastqc_trimmed {
     file "*_fastqc.{zip,html}" into fastqc_results_trimmed
 
     script:
-    """
-    fastqc -t "${task.cpus}" -q ${reads}
-    """
+    if ( !params.single_end ) {
+        """
+        fastqc -t "${task.cpus}" -q ${reads}
+        mv *1_fastqc.html "${name}_R1.trimmed_fastqc.html"
+        mv *2_fastqc.html "${name}_R2.trimmed_fastqc.html"
+        mv *1_fastqc.zip "${name}_R1.trimmed_fastqc.zip"
+        mv *2_fastqc.zip "${name}_R2.trimmed_fastqc.zip"
+        """
+    } else {
+        """
+        fastqc -t "${task.cpus}" -q ${reads}
+        mv *_fastqc.html "${name}.trimmed_fastqc.html"
+        mv *_fastqc.zip "${name}.trimmed_fastqc.zip"
+        """
+    }
 }
 
 // TODO rewrite channel io
@@ -581,7 +720,7 @@ process multiqc {
     // TODO nf-core: Add in log files from your new processes for MultiQC to find!
     file (fastqc_raw:'fastqc/*') from fastqc_results.collect().ifEmpty([])
     file (fastqc_trimmed:'fastqc/*') from fastqc_results_trimmed.collect().ifEmpty([])
-//    file (host_removal) from ch_host_removed_log.collect().ifEmpty([])
+    file (host_removal) from ch_host_removed_log.collect().ifEmpty([])
     file ('software_versions/*') from ch_software_versions_yaml.collect()
     file workflow_summary from ch_workflow_summary.collectFile(name: "workflow_summary_mqc.yaml")
 
@@ -594,10 +733,20 @@ process multiqc {
     rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
     rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
     custom_config_file = params.multiqc_config ? "--config $mqc_custom_config" : ''
-
-    """
-    multiqc -f $rtitle $rfilename $custom_config_file .
-    """
+    read_type = params.single_end ? "--single_end" : ''
+    if ( params.host_fasta || params.host_genome ) {
+        """
+        # get multiqc parsed data for bowtie 2
+        multiqc -f $rtitle $rfilename $custom_config_file *.bowtie2.log
+        multiqc_to_custom_tsv.py ${read_type}
+        # run multiqc using custom content file instead of original bowtie2 log files
+        multiqc -f $rtitle $rfilename $custom_config_file --ignore "*.bowtie2.log" .
+        """
+    } else {
+        """
+        multiqc -f $rtitle $rfilename $custom_config_file .
+        """
+    }
 }
 
 /*

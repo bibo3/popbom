@@ -292,7 +292,7 @@ process get_software_versions {
     fastp -v 2> v_fastp.txt
     kraken2 -v > v_kraken2.txt
     centrifuge --version > v_centrifuge.txt
-    metaphlan -v > v_metaphlan.txt
+    #metaphlan -v > v_metaphlan.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
@@ -687,7 +687,6 @@ if ( !params.skip_metaphlan) {
 
         input:
         tuple val(name), file(reads), file(db) from ch_metaphlan_input
-        val(metaphlan_read_min_len) from params.metaphlan_read_min_len
 
         output:
         file("metaphlan_report.txt")
@@ -696,13 +695,12 @@ if ( !params.skip_metaphlan) {
         script:
         def input = params.singleEnd ? "\"${reads}\"" :  "\"${reads[0]}\",\"${reads[1]}\""
         """
-        metaphlan \
+        metaphlan2.py \
             $input \
             --input_type fastq \
             --bowtie2db "${db}" \
             --bowtie2out mapping.bt2 \
             --nproc "${task.cpus}" \
-            --read_min_len "${metaphlan_read_min_len}" \
             -o metaphlan_report.txt
         """
     }

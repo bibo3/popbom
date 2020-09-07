@@ -52,11 +52,26 @@ def reading_metaphlan(basepath):
     metaphlan_total = metaphlan_total.rename(columns=lambda x: x.split('|s__')[1])
     return metaphlan_total.fillna(0)
 
+# reading in marker based metaphlan reports
+def reading_mpa_marker(basepath):
+    # setting glob path    
+    m_path =  glob.glob(basepath + "/*/metaphlan_marker_report.txt")
+    # clade names become column names, filenames the index 
+    metaphlan_total = pd.concat(
+        map(lambda file: 
+            pd.read_csv(file, 
+                        sep='\t', 
+                        skiprows=4, 
+                        names=('marker_name', file.split('/')[-2]), 
+                        index_col='marker_name').T, 
+            m_path))
+    return metaphlan_total.fillna(0)
+
 
 def main():
     # read in reports and write to a single file
     parser = argparse.ArgumentParser(description='Run RF with kraken2 or metaphlan')
-    parser.add_argument('--taxo', '-t', choices=['metaphlan', 'kraken2', 'centrifuge'], required=True, help='which taxonomic profiler is used?')
+    parser.add_argument('--taxo', '-t', choices=['metaphlan', 'kraken2', 'centrifuge', 'mpa_marker'], required=True, help='which taxonomic profiler is used?')
     parser.add_argument('--directory', '-d', required=True, help='directory containing the reports in individual directories with their name corresponding to sample name')
     parser.add_argument('--outdir', '-o', help='directory for output')
     args = parser.parse_args()
@@ -67,7 +82,11 @@ def main():
         
     if args.taxo == 'kraken2':
         kraken = reading_kraken2(args.directory)
-        kraken.to_csv(args.outdir+'/kraken2_table.csv')        
+        kraken.to_csv(args.outdir+'/kraken2_table.csv')
+        
+    if args.taxo == 'mpa_marker':
+        mpa = reading_mpa_marker(args.directory)
+        mpa.to_csv(args.outdir+'/metaphlan_marker_table.csv')
 
 if __name__ == '__main__':
     main()

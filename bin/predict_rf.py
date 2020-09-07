@@ -14,8 +14,9 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.metrics import roc_auc_score, confusion_matrix
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
 import time
  
 ###### For reproducable ML
@@ -110,15 +111,16 @@ def main():
     
     X_train, X_test, y_train, y_test = split_data(md_filtered, df, loops, seed)
     
-    param_grid = {
+    param_grid_rf = {
         'n_estimators': [10, 100],
         'max_depth': [6, 10, None],
         'max_features': [50, 100, 'auto'],
         'criterion': ['gini', 'entropy']
     }
 
+    
     rf = RandomForestClassifier(random_state=seed)
-    best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, rf, param_grid)
+    best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, rf, param_grid_rf)
 
     best_prediction = []
     best_rf = RandomForestClassifier(**best_params, random_state=seed)
@@ -126,11 +128,27 @@ def main():
         best_rf.fit(X_train[i], y_train[i])
         best_prediction.append(evaluate_performance(y_test[i], best_rf.predict(X_test[i])))
     #print(best_prediction)
+    
+    """
+    # svm part, comment out rf and uncomment this to use
+    param_grid_svm = {
+        'kernel': ['linear', 'poly'],
+        'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+        }
+    svm = SVC(random_state=seed, probability=True)
+    best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, svm, param_grid_svm)
+    best_prediction = []
+    best_svm = SVC(**best_params, random_state=seed, probability=True)
+    for i in range(loops):
+        best_svm.fit(X_train[i], y_train[i])
+        best_prediction.append(evaluate_performance(y_test[i], best_svm.predict(X_test[i])))
+    """
+
     sum_roc = 0
     for j in best_prediction:
         print(j[0])
         sum_roc += j[0]
-    print("Mean of ROC: %.3f" % sum_roc/len(best_prediction))
+    print("Mean of ROC: %.3f" % (sum_roc/len(best_prediction)))
     print("--- %.2f seconds ---" % (time.time()-start_time))
  
 if __name__ == '__main__':

@@ -47,10 +47,12 @@ def filter_metadata(md_total, df_summary):
 def split_data(label_df, df_data, splits, seed_value):
     sss = StratifiedShuffleSplit(n_splits=splits, test_size=0.2, random_state=seed_value)
     X_train, X_test, y_train, y_test = [], [], [], []
-    X = np.zeros(label_df.shape[0])
-    for train_index, test_index in sss.split(X, label_df.iloc[:,0]):
-        y_train.append(label_df.iloc[train_index])
-        y_test.append(label_df.iloc[test_index])
+    labels = df_data.index.get_level_values("disease").values
+    X = np.zeros(len(labels))
+    for train_index, test_index in sss.split(X, labels):
+
+        y_train.append(df_data.iloc[train_index].index.get_level_values("disease").values)
+        y_test.append(df_data.iloc[test_index].index.get_level_values("disease").values)
         X_train.append(df_data.iloc[train_index])
         X_test.append(df_data.iloc[test_index])
     return X_train, X_test, y_train, y_test
@@ -103,18 +105,19 @@ def main():
     set_seed(seed)
 
     if args.taxo == 'metaphlan':
-        df=pd.read_csv(args.input, index_col=0, header=0)
+        df=pd.read_csv(args.input, index_col=[0,1], header=0)
     if args.taxo == 'kraken2':
         df=pd.read_csv(args.input, index_col=0, header=[0,1])
 
     md_filtered=filter_metadata(args.metadata, df)
     
     X_train, X_test, y_train, y_test = split_data(md_filtered, df, loops, seed)
-    
+
     param_grid_rf = {
-        'n_estimators': [10, 100],
-        'max_depth': [6, 10, None],
-        'max_features': [50, 100, 'auto'],
+        'n_estimators': [10, 500, 700, 1000],
+ #       'max_depth': [10, None],
+ #       'max_features': [100, 'auto'],
+        'min_samples_split': [2],
         'criterion': ['gini', 'entropy']
     }
 
@@ -123,12 +126,15 @@ def main():
     best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, rf, param_grid_rf)
 
     best_prediction = []
+    proba, pred = [], []
     best_rf = RandomForestClassifier(**best_params, random_state=seed)
+    #best_rf = RandomForestClassifier(n_estimators=500, max_depth=None, min_samples_split=2, n_jobs=-1, random_state=seed)
     for i in range(loops):
         best_rf.fit(X_train[i], y_train[i])
+        proba.append(best_rf.predict_proba(X_test[i]))
+        pred.append(best_rf.predict(X_test[i]))
         best_prediction.append(evaluate_performance(y_test[i], best_rf.predict(X_test[i])))
-    #print(best_prediction)
-    
+
     """
     # svm part, comment out rf and uncomment this to use
     param_grid_svm = {

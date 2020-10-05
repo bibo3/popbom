@@ -33,7 +33,7 @@ def reading_kraken2(basepath):
 
 
 # reading in metaphlan reports
-def reading_metaphlan(basepath):
+def reading_metaphlan(basepath, metadata):
     # setting glob path    
     m_path =  glob.glob(basepath + "/*/metaphlan_report.txt")
     # clade names become column names, filenames the index 
@@ -46,11 +46,16 @@ def reading_metaphlan(basepath):
                         usecols=(0,2), 
                         index_col='clade_name').T, 
             m_path))
+    if 'HV1' in metaphlan_total.index:
+        metaphlan_total.index=metaphlan_total.index.str.replace('V','V-')
     # filter that only species remain
     metaphlan_total = metaphlan_total.filter(like='|s__')
     # rename columns for better readability
-    metaphlan_total = metaphlan_total.rename(columns=lambda x: x.split('|s__')[1])
-    return metaphlan_total.fillna(0)
+    metaphlan_total = metaphlan_total.rename(columns=lambda x: x.split('|s__')[1]).fillna(0)
+    df_metadata = pd.read_csv(metadata, index_col=0)
+    metaphlan_total = pd.concat([metaphlan_total, df_metadata], axis=1)
+    metaphlan_total = metaphlan_total.set_index([metaphlan_total.index, 'disease'])
+    return metaphlan_total
 
 # reading in marker based metaphlan reports
 def reading_mpa_marker(basepath):
@@ -74,10 +79,11 @@ def main():
     parser.add_argument('--taxo', '-t', choices=['metaphlan', 'kraken2', 'centrifuge', 'mpa_marker'], required=True, help='which taxonomic profiler is used?')
     parser.add_argument('--directory', '-d', required=True, help='directory containing the reports in individual directories with their name corresponding to sample name')
     parser.add_argument('--outdir', '-o', help='directory for output')
+    parser.add_argument('--metadata', '-m', help='metadata file')
     args = parser.parse_args()
     
     if args.taxo == 'metaphlan':
-        mpa = reading_metaphlan(args.directory)
+        mpa = reading_metaphlan(args.directory, args.metadata)
         mpa.to_csv(args.outdir+'/metaphlan_table.csv')
         
     if args.taxo == 'kraken2':

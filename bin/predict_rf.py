@@ -32,8 +32,9 @@ def parseargs():
                         help='which taxonomic profiler has been used?')
     parser.add_argument('--seed', '-s', default=42, help='the seed for random values')
     parser.add_argument('--threads', default=-1, help='number of threads to be used for multithreading')
-    parser.add_argument('--metadata', '-m', help='metadata file')
     parser.add_argument('--loops', '-l', default=10, help='how many splits and loops for validating')
+    parser.add_argument('--output', '-o', help='name of output file')
+
 
     return parser.parse_args()
 
@@ -44,22 +45,21 @@ def filter_metadata(md_total, df_summary):
 
 # spliting the datasets into test/train sets
 # returns arrays X_train, X_test, y_train, y_test of length #splits  
-def split_data(label_df, df_data, splits, seed_value):
+def split_data(df_data, splits, seed_value):
     sss = StratifiedShuffleSplit(n_splits=splits, test_size=0.2, random_state=seed_value)
     X_train, X_test, y_train, y_test = [], [], [], []
-    labels = df_data.index.get_level_values("disease").values
+    labels = df_data.index.get_level_values('disease').values
     X = np.zeros(len(labels))
     for train_index, test_index in sss.split(X, labels):
-
-        y_train.append(df_data.iloc[train_index].index.get_level_values("disease").values)
-        y_test.append(df_data.iloc[test_index].index.get_level_values("disease").values)
+        y_train.append(df_data.iloc[train_index].index.get_level_values('disease').values)
+        y_test.append(df_data.iloc[test_index].index.get_level_values('disease').values)
         X_train.append(df_data.iloc[train_index])
         X_test.append(df_data.iloc[test_index])
     return X_train, X_test, y_train, y_test
 
 # Evaluation function: auc score, precision, accuracy, recall and f1
-def evaluate_performance(y_true, y_pred):
-    auc = roc_auc_score(y_true, y_pred)
+def evaluate_performance(y_true, y_pred, y_pred_proba):
+    auc = roc_auc_score(y_true, y_pred_proba)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     
     accuracy = (tp + tn) / (tp + fp + tn + fn)
@@ -87,7 +87,9 @@ def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, thre
 def param_fitting(X_train, X_test, y_train, y_test, loops, seed, model, param_grid):
     cv_params = []
     for i in range(loops):
-        X_train_s, X_test_s, y_train_s, y_test_s = split_data(y_train[i], X_train[i], loops, seed)
+ #       print(type(y_train[i]))
+  #      print(X_train[i])
+        X_train_s, X_test_s, y_train_s, y_test_s = split_data(X_train[i], loops, seed)
         for j in range(loops):
             clf = grid_search(X_train_s[j], X_test_s[j], y_train_s[j], model, param_grid)
             cv_params.append(clf.cv_results_)
@@ -108,20 +110,17 @@ def main():
         df=pd.read_csv(args.input, index_col=[0,1], header=0)
     if args.taxo == 'kraken2':
         df=pd.read_csv(args.input, index_col=0, header=[0,1])
-
-    md_filtered=filter_metadata(args.metadata, df)
     
-    X_train, X_test, y_train, y_test = split_data(md_filtered, df, loops, seed)
+    X_train, X_test, y_train, y_test = split_data(df, loops, seed)
 
     param_grid_rf = {
-        'n_estimators': [10, 500, 700, 1000],
- #       'max_depth': [10, None],
- #       'max_features': [100, 'auto'],
-        'min_samples_split': [2],
+        'n_estimators': [100, 500, 700, 1000],
+        'max_depth': [2, 6, 10, None],
+        'max_features': [0.33, 0.5, 1, 100, 'auto'],
+        'min_samples_split': [2, 3, None],
         'criterion': ['gini', 'entropy']
     }
 
-    
     rf = RandomForestClassifier(random_state=seed)
     best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, rf, param_grid_rf)
 
@@ -131,9 +130,9 @@ def main():
     #best_rf = RandomForestClassifier(n_estimators=500, max_depth=None, min_samples_split=2, n_jobs=-1, random_state=seed)
     for i in range(loops):
         best_rf.fit(X_train[i], y_train[i])
-        proba.append(best_rf.predict_proba(X_test[i]))
-        pred.append(best_rf.predict(X_test[i]))
-        best_prediction.append(evaluate_performance(y_test[i], best_rf.predict(X_test[i])))
+        proba = best_rf.predict_proba(X_test[i])[:,1]
+        pred = best_rf.predict(X_test[i])
+        best_prediction.append(evaluate_performance(y_test[i], pred, proba))
 
     """
     # svm part, comment out rf and uncomment this to use
@@ -150,12 +149,24 @@ def main():
         best_prediction.append(evaluate_performance(y_test[i], best_svm.predict(X_test[i])))
     """
 
-    sum_roc = 0
-    for j in best_prediction:
-        print(j[0])
-        sum_roc += j[0]
-    print("Mean of ROC: %.3f" % (sum_roc/len(best_prediction)))
-    print("--- %.2f seconds ---" % (time.time()-start_time))
- 
+    r = 5
+    bp = np.array(best_prediction)
+    print(f'Mean of ROC: {round(np.mean(bp[:,0]), r)}')
+    print(f'--- {round((time.time()-start_time), 3)} seconds ---')
+    with open(args.output, 'w') as fh:
+        fh.write('Script parameters:\n')
+        fh.write(f'Input file: {args.input} \nTaxonomic profiler used: {args.taxo} \nValidation loops: {args.loops}\n')
+        fh.write('\nBest hyperparameters:\n')
+        fh.write(f'{best_params}\n')       
+        fh.write('\nMean values of evaluation runs with standard deviation:\n')     
+        fh.write(f'ROC: {round(np.mean(bp[:,0]), r)}\t{round(np.std(bp[:,0]), r)} \n')
+        fh.write(f'Accuracy: {round(np.mean(bp[:,1]), r)}\t{round(np.std(bp[:,1]), r)} \n')
+        fh.write(f'Precision: {round(np.mean(bp[:,2]), r)}\t{round(np.std(bp[:,2]), r)} \n')
+        fh.write(f'Recall: {round(np.mean(bp[:,3]), r)}\t{round(np.std(bp[:,3]), r)} \n')
+        fh.write(f'F1-Score: {round(np.mean(bp[:,4]), r)}\t{round(np.std(bp[:,4]), r)} \n')
+
+        fh.write('\nAll evaluation scores:\nROC\tAccuracy\tPrecision\tRecall\tF1-Score\n')
+        [fh.write(f'{round(i[0], r)}\t{round(i[1], r)}\t{round(i[2], r)}\t{round(i[3], r)}\t{round(i[4], r)} \n') for i in best_prediction]
+      
 if __name__ == '__main__':
     main()

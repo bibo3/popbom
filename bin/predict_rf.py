@@ -34,6 +34,7 @@ def parseargs():
     parser.add_argument('--threads', default=-1, help='number of threads to be used for multithreading')
     parser.add_argument('--loops', '-l', default=10, help='how many splits and loops for validating')
     parser.add_argument('--output', '-o', help='name of output file')
+    parser.add_argument('--classifier', '-c', choices=['RF', 'SVM'], help='which classifier to use')
 
 
     return parser.parse_args()
@@ -109,45 +110,46 @@ def main():
     if args.taxo == 'metaphlan':
         df=pd.read_csv(args.input, index_col=[0,1], header=0)
     if args.taxo == 'kraken2':
-        df=pd.read_csv(args.input, index_col=0, header=[0,1])
+        df=pd.read_csv(args.input, index_col=[0,1], header=[0,1])
     
     X_train, X_test, y_train, y_test = split_data(df, loops, seed)
 
-    param_grid_rf = {
-        'n_estimators': [100, 500, 700, 1000],
-        'max_depth': [2, 6, 10, None],
-        'max_features': [0.33, 0.5, 1, 100, 'auto'],
-        'min_samples_split': [2, 3, None],
-        'criterion': ['gini', 'entropy']
-    }
 
-    rf = RandomForestClassifier(random_state=seed)
-    best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, rf, param_grid_rf)
-
-    best_prediction = []
-    proba, pred = [], []
-    best_rf = RandomForestClassifier(**best_params, random_state=seed)
-    #best_rf = RandomForestClassifier(n_estimators=500, max_depth=None, min_samples_split=2, n_jobs=-1, random_state=seed)
-    for i in range(loops):
-        best_rf.fit(X_train[i], y_train[i])
-        proba = best_rf.predict_proba(X_test[i])[:,1]
-        pred = best_rf.predict(X_test[i])
-        best_prediction.append(evaluate_performance(y_test[i], pred, proba))
-
-    """
-    # svm part, comment out rf and uncomment this to use
-    param_grid_svm = {
-        'kernel': ['linear', 'poly'],
-        'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    if args.classifier == 'RF':
+        param_grid_rf = {
+            'n_estimators': [100, 500, 700, 1000],
+            'max_depth': [2, 6, 10, None],
+            'max_features': [0.33, 0.5, 1, 100, 'auto'],
+            'min_samples_split': [2, 3, None],
+            'criterion': ['gini', 'entropy']
         }
-    svm = SVC(random_state=seed, probability=True)
-    best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, svm, param_grid_svm)
-    best_prediction = []
-    best_svm = SVC(**best_params, random_state=seed, probability=True)
-    for i in range(loops):
-        best_svm.fit(X_train[i], y_train[i])
-        best_prediction.append(evaluate_performance(y_test[i], best_svm.predict(X_test[i])))
-    """
+    
+        rf = RandomForestClassifier(random_state=seed)
+        best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, rf, param_grid_rf)
+    
+        best_prediction = []
+        proba, pred = [], []
+        best_rf = RandomForestClassifier(**best_params, random_state=seed)
+        #best_rf = RandomForestClassifier(n_estimators=500, max_depth=None, min_samples_split=2, n_jobs=-1, random_state=seed)
+        for i in range(loops):
+            best_rf.fit(X_train[i], y_train[i])
+            proba = best_rf.predict_proba(X_test[i])[:,1]
+            pred = best_rf.predict(X_test[i])
+            best_prediction.append(evaluate_performance(y_test[i], pred, proba))
+
+    if args.classifier == 'SVM':
+        param_grid_svm = {
+            'kernel': ['linear', 'poly'],
+            'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+            }
+        svm = SVC(random_state=seed, probability=True)
+        best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, svm, param_grid_svm)
+        best_prediction = []
+        best_svm = SVC(**best_params, random_state=seed, probability=True)
+        for i in range(loops):
+            best_svm.fit(X_train[i], y_train[i])
+            best_prediction.append(evaluate_performance(y_test[i], best_svm.predict(X_test[i])))
+        
 
     r = 5
     bp = np.array(best_prediction)
@@ -155,7 +157,7 @@ def main():
     print(f'--- {round((time.time()-start_time), 3)} seconds ---')
     with open(args.output, 'w') as fh:
         fh.write('Script parameters:\n')
-        fh.write(f'Input file: {args.input} \nTaxonomic profiler used: {args.taxo} \nValidation loops: {args.loops}\n')
+        fh.write(f'Input file: {args.input} \nTaxonomic profiler used: {args.taxo} \nValidation loops: {args.loops}\nClassifier: {args.classifier}\n')
         fh.write('\nBest hyperparameters:\n')
         fh.write(f'{best_params}\n')       
         fh.write('\nMean values of evaluation runs with standard deviation:\n')     

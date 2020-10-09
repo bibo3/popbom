@@ -31,6 +31,9 @@ def reading_kraken2(basepath, metadata, species):
         kraken_total = kraken_total.loc[:,kraken_total.columns.get_level_values(2).isin(['S'])].droplevel('rank', axis=1)
     # relative abundances
     kraken_total = kraken_total.div(total_ab_kraken, axis=0)
+    df_metadata = pd.read_csv(metadata, index_col=0)
+    kraken_total = pd.concat([kraken_total, df_metadata], axis=1)
+    kraken_total = kraken_total.set_index([kraken_total.index, 'disease'])    
     return kraken_total.fillna(0)
 
 
@@ -54,12 +57,12 @@ def reading_metaphlan(basepath, metadata, species):
         # filter that only species remain
         metaphlan_total = metaphlan_total.filter(like='|s__')
         # rename columns for better readability
-        metaphlan_total = metaphlan_total.rename(columns=lambda x: x.split('|s__')[1]).fillna(0)
+        metaphlan_total = metaphlan_total.rename(columns=lambda x: x.split('|s__')[1])
     
     df_metadata = pd.read_csv(metadata, index_col=0)
     metaphlan_total = pd.concat([metaphlan_total, df_metadata], axis=1)
     metaphlan_total = metaphlan_total.set_index([metaphlan_total.index, 'disease'])
-    return metaphlan_total
+    return metaphlan_total.fillna(0)
 
 
 # reading in marker based metaphlan reports
@@ -75,6 +78,9 @@ def reading_mpa_marker(basepath, metadata):
                         names=('marker_name', file.split('/')[-2]), 
                         index_col='marker_name').T, 
             m_path))
+    df_metadata = pd.read_csv(metadata, index_col=0)
+    metaphlan_total = pd.concat([metaphlan_total, df_metadata], axis=1)
+    metaphlan_total = metaphlan_total.set_index([metaphlan_total.index, 'disease'])
     return metaphlan_total.fillna(0)
 
 

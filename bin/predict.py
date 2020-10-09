@@ -36,13 +36,14 @@ def parseargs():
     parser.add_argument('--output', '-o', help='name of output file')
     parser.add_argument('--classifier', '-c', choices=['RF', 'SVM'], help='which classifier to use')
 
-
     return parser.parse_args()
+
 
 # handling metadata
 def filter_metadata(md_total, df_summary):
     metadata = pd.read_csv(md_total, index_col=0)
     return metadata[metadata.index.isin(list(df_summary.index))]
+
 
 # spliting the datasets into test/train sets
 # returns arrays X_train, X_test, y_train, y_test of length #splits  
@@ -58,6 +59,7 @@ def split_data(df_data, splits, seed_value):
         X_test.append(df_data.iloc[test_index])
     return X_train, X_test, y_train, y_test
 
+
 # Evaluation function: auc score, precision, accuracy, recall and f1
 def evaluate_performance(y_true, y_pred, y_pred_proba):
     auc = roc_auc_score(y_true, y_pred_proba)
@@ -72,6 +74,7 @@ def evaluate_performance(y_true, y_pred, y_pred_proba):
         precision, recall, f1 = 0.0, 0.0, 0.0
     return [auc, accuracy, precision, recall, f1]
 
+
 # perform grid search of model with given param grid (dict of params and values to consider)
 def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, threads=-1, cv=5):
     gs = GridSearchCV(
@@ -82,6 +85,7 @@ def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, thre
         verbose=2)
     fitted_model = gs.fit(X_train_data, y_train_data)
     return fitted_model
+
 
 # runs #loops^2, splits given set #loops times, then performs grid_search #loop times
 # returns the best hyperparameters (set of parameters with highest sum of mean_test_score)
@@ -113,8 +117,8 @@ def main():
         df=pd.read_csv(args.input, index_col=[0,1], header=[0,1])
     
     X_train, X_test, y_train, y_test = split_data(df, loops, seed)
-
-
+    best_prediction = []
+    # Random Forrest Classifier 
     if args.classifier == 'RF':
         param_grid_rf = {
             'n_estimators': [100, 500, 700, 1000],
@@ -127,7 +131,6 @@ def main():
         rf = RandomForestClassifier(random_state=seed)
         best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, rf, param_grid_rf)
     
-        best_prediction = []
         proba, pred = [], []
         best_rf = RandomForestClassifier(**best_params, random_state=seed)
         #best_rf = RandomForestClassifier(n_estimators=500, max_depth=None, min_samples_split=2, n_jobs=-1, random_state=seed)
@@ -137,6 +140,7 @@ def main():
             pred = best_rf.predict(X_test[i])
             best_prediction.append(evaluate_performance(y_test[i], pred, proba))
 
+    # SVM
     if args.classifier == 'SVM':
         param_grid_svm = {
             'kernel': ['linear', 'poly'],
@@ -144,17 +148,18 @@ def main():
             }
         svm = SVC(random_state=seed, probability=True)
         best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, svm, param_grid_svm)
-        best_prediction = []
         best_svm = SVC(**best_params, random_state=seed, probability=True)
         for i in range(loops):
             best_svm.fit(X_train[i], y_train[i])
             best_prediction.append(evaluate_performance(y_test[i], best_svm.predict(X_test[i])))
-        
 
+    # Round results to r digits
     r = 5
     bp = np.array(best_prediction)
     print(f'Mean of ROC: {round(np.mean(bp[:,0]), r)}')
     print(f'--- {round((time.time()-start_time), 3)} seconds ---')
+    
+    # Writing output to file
     with open(args.output, 'w') as fh:
         fh.write('Script parameters:\n')
         fh.write(f'Input file: {args.input} \nTaxonomic profiler used: {args.taxo} \nValidation loops: {args.loops}\nClassifier: {args.classifier}\n')
@@ -169,6 +174,7 @@ def main():
 
         fh.write('\nAll evaluation scores:\nROC\tAccuracy\tPrecision\tRecall\tF1-Score\n')
         [fh.write(f'{round(i[0], r)}\t{round(i[1], r)}\t{round(i[2], r)}\t{round(i[3], r)}\t{round(i[4], r)} \n') for i in best_prediction]
-      
+
+        
 if __name__ == '__main__':
     main()

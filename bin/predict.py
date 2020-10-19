@@ -13,10 +13,11 @@ import argparse
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedShuffleSplit
-from sklearn.metrics import roc_auc_score, confusion_matrix
+from sklearn.metrics import roc_auc_score, confusion_matrix, plot_roc_curve, matthews_corrcoef
 from sklearn.model_selection import GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
+import matplotlib.pyplot as plt
 import time
  
 ###### For reproducable ML
@@ -28,8 +29,8 @@ def set_seed(seed_value):
 def parseargs():
     parser = argparse.ArgumentParser(description='Run RF with kraken2 or metaphlan')
     parser.add_argument('--input', '-i', help='file containing report summary table')
-    parser.add_argument('--taxo', '-t', choices=['metaphlan', 'kraken2'],
-                        help='which taxonomic profiler has been used?')
+#    parser.add_argument('--taxo', '-t', choices=['metaphlan', 'kraken2'],
+#                        help='which taxonomic profiler has been used?')
     parser.add_argument('--seed', '-s', default=42, help='the seed for random values')
     parser.add_argument('--threads', default=-1, help='number of threads to be used for multithreading')
     parser.add_argument('--loops', '-l', default=10, help='how many splits and loops for validating')
@@ -72,7 +73,8 @@ def evaluate_performance(y_true, y_pred, y_pred_proba):
         f1 = (2 * precision * recall) / (precision + recall)
     else:
         precision, recall, f1 = 0.0, 0.0, 0.0
-    return [auc, accuracy, precision, recall, f1]
+    mcc = matthews_corrcoef(y_true, y_pred)
+    return [auc, accuracy, precision, recall, f1, mcc]
 
 
 # perform grid search of model with given param grid (dict of params and values to consider)
@@ -111,20 +113,26 @@ def main():
     loops = int(args.loops)
     set_seed(seed)
 
-    if args.taxo == 'metaphlan':
-        df=pd.read_csv(args.input, index_col=[0,1], header=0)
-    if args.taxo == 'kraken2':
-        df=pd.read_csv(args.input, index_col=[0,1], header=[0,1])
+#    if args.taxo == 'metaphlan':
+    df=pd.read_csv(args.input, index_col=[0,1], header=0)
+#    if args.taxo == 'kraken2':
+#        df=pd.read_csv(args.input, index_col=[0,1], header=0)
     
     X_train, X_test, y_train, y_test = split_data(df, loops, seed)
     best_prediction = []
+
+    tprs = []
+    aucs = []
+    mean_fpr = np.linspace(0, 1, 100)
+    fig, ax = plt.subplots(figsize=(10, 8))
+
     # Random Forrest Classifier 
     if args.classifier == 'RF':
         param_grid_rf = {
             'n_estimators': [100, 500, 700, 1000],
             'max_depth': [2, 6, 10, None],
             'max_features': [0.33, 0.5, 1, 100, 'auto'],
-            'min_samples_split': [2, 3, None],
+            'min_samples_split': [2, 3],
             'criterion': ['gini', 'entropy']
         }
     
@@ -139,30 +147,73 @@ def main():
             proba = best_rf.predict_proba(X_test[i])[:,1]
             pred = best_rf.predict(X_test[i])
             best_prediction.append(evaluate_performance(y_test[i], pred, proba))
+            # ROC plotting
+            viz = plot_roc_curve(best_rf, X_test[i], y_test[i],
+                         name='ROC fold {}'.format(i),
+                         alpha=0.3, lw=1, ax=ax)
+            interp_tpr = np.interp(mean_fpr, viz.fpr, viz.tpr)
+            interp_tpr[0] = 0.0
+            tprs.append(interp_tpr)
+            aucs.append(viz.roc_auc)
 
     # SVM
     if args.classifier == 'SVM':
         param_grid_svm = {
-            'kernel': ['linear', 'poly'],
-            'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+            'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
+            'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0]
             }
         svm = SVC(random_state=seed, probability=True)
         best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, svm, param_grid_svm)
         best_svm = SVC(**best_params, random_state=seed, probability=True)
         for i in range(loops):
             best_svm.fit(X_train[i], y_train[i])
-            best_prediction.append(evaluate_performance(y_test[i], best_svm.predict(X_test[i])))
+            proba = best_svm.predict_proba(X_test[i])[:,1]
+            pred = best_svm.predict(X_test[i])
+            best_prediction.append(evaluate_performance(y_test[i], pred, proba))
+            # ROC plotting
+            viz = plot_roc_curve(best_svm, X_test[i], y_test[i],
+                         name='ROC fold {}'.format(i),
+                         alpha=0.3, lw=1, ax=ax)
+            interp_tpr = np.interp(mean_fpr, viz.fpr, viz.tpr)
+            interp_tpr[0] = 0.0
+            tprs.append(interp_tpr)
+            aucs.append(viz.roc_auc)   
 
     # Round results to r digits
     r = 5
     bp = np.array(best_prediction)
-    print(f'Mean of ROC: {round(np.mean(bp[:,0]), r)}')
+    mean_auc = np.mean(bp[:,0])
+
+    # ROC plotting
+    ax.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r',
+            label='Chance', alpha=.8)
+
+    mean_tpr = np.mean(tprs, axis=0)
+    mean_tpr[-1] = 1.0
+    std_auc = np.std(aucs)
+    ax.plot(mean_fpr, mean_tpr, color='b',
+            label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
+            lw=2, alpha=.8)
+
+    std_tpr = np.std(tprs, axis=0)
+    tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
+    tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
+    ax.fill_between(mean_fpr, tprs_lower, tprs_upper, color='grey', alpha=.2,
+                    label=r'$\pm$ 1 std. dev.')
+
+    ax.set(xlim=[-0.05, 1.05], ylim=[-0.05, 1.05],
+           title=f"{args.classifier} Receiver Operating Curve")
+    ax.legend(loc="lower right")
+    plt.savefig(args.output+'_roc.png')
+
+    print(f'Mean of ROC: {round(mean_auc, r)}')
     print(f'--- {round((time.time()-start_time), 3)} seconds ---')
     
-    # Writing output to file
-    with open(args.output, 'w') as fh:
+    # Writing metric to output file
+    with open(args.output+'.txt', 'w') as fh:
         fh.write('Script parameters:\n')
-        fh.write(f'Input file: {args.input} \nTaxonomic profiler used: {args.taxo} \nValidation loops: {args.loops}\nClassifier: {args.classifier}\n')
+        fh.write(f'Input file: {args.input}\nValidation loops: {args.loops}\nClassifier: {args.classifier}\n')
+        fh.write(f'Execution time: {round((time.time()-start_time)/60, 3)} minutes')
         fh.write('\nBest hyperparameters:\n')
         fh.write(f'{best_params}\n')       
         fh.write('\nMean values of evaluation runs with standard deviation:\n')     
@@ -171,9 +222,10 @@ def main():
         fh.write(f'Precision: {round(np.mean(bp[:,2]), r)}\t{round(np.std(bp[:,2]), r)} \n')
         fh.write(f'Recall: {round(np.mean(bp[:,3]), r)}\t{round(np.std(bp[:,3]), r)} \n')
         fh.write(f'F1-Score: {round(np.mean(bp[:,4]), r)}\t{round(np.std(bp[:,4]), r)} \n')
+        fh.write(f'MCC: {round(np.mean(bp[:,5]), r)}\t{round(np.std(bp[:,5]), r)} \n')
 
-        fh.write('\nAll evaluation scores:\nROC\tAccuracy\tPrecision\tRecall\tF1-Score\n')
-        [fh.write(f'{round(i[0], r)}\t{round(i[1], r)}\t{round(i[2], r)}\t{round(i[3], r)}\t{round(i[4], r)} \n') for i in best_prediction]
+        fh.write('\nAll evaluation scores:\nROC\tAccuracy\tPrecision\tRecall\tF1-Score\tMCC\n')
+        [fh.write(f'{round(i[0], r)}\t{round(i[1], r)}\t{round(i[2], r)}\t{round(i[3], r)}\t{round(i[4], r)}\t{round(i[5], r)} \n') for i in best_prediction]
 
         
 if __name__ == '__main__':

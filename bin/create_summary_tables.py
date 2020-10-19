@@ -24,17 +24,26 @@ def reading_kraken2(basepath, metadata, species):
                         index_col=('tax_id','sci_name','rank')).T,
             k_path))
     
+    if 'HV1' in kraken_total.index:
+        kraken_total.index=kraken_total.index.str.replace('V','V-')
+    if 'MetaHIT-MH0001' in kraken_total.index:
+        kraken_total.index=kraken_total.index.str.replace('MetaHIT-M','M')
+
     # total values of abundances (unassigned+root) 
     total_ab_kraken = kraken_total.loc[:,[0, 1]].sum(axis=1)
+    # relative abundances
+    kraken_total = kraken_total.div(total_ab_kraken, axis=0)
+
     if species:
         # filter so that only species remain and drop rank column afterwards
         kraken_total = kraken_total.loc[:,kraken_total.columns.get_level_values(2).isin(['S'])].droplevel('rank', axis=1)
-    # relative abundances
-    kraken_total = kraken_total.div(total_ab_kraken, axis=0)
+
     df_metadata = pd.read_csv(metadata, index_col=0)
     kraken_total = pd.concat([kraken_total, df_metadata], axis=1)
-    kraken_total = kraken_total.set_index([kraken_total.index, 'disease'])    
-    return kraken_total.fillna(0)
+
+    kraken_total = kraken_total.set_index([kraken_total.index, 'disease'])
+#    kraken_total=kraken_total[kraken_total.iloc[:,[1]].notnull()]
+    return kraken_total.dropna()
 
 
 # reading in metaphlan reports
@@ -53,15 +62,20 @@ def reading_metaphlan(basepath, metadata, species):
             m_path))
     if 'HV1' in metaphlan_total.index:
         metaphlan_total.index=metaphlan_total.index.str.replace('V','V-')
+    if 'MetaHIT-MH0001' in metaphlan_total.index:
+        metaphlan_total.index=metaphlan_total.index.str.replace('MetaHIT-M','M')
+    
+    df_metadata = pd.read_csv(metadata, index_col=0)
+    metaphlan_total = pd.concat([metaphlan_total, df_metadata], axis=1)
+    metaphlan_total = metaphlan_total.set_index([metaphlan_total.index, 'disease'])
+    metaphlan_total=metaphlan_total[metaphlan_total.k__Bacteria.notnull()]
+
     if species:
         # filter that only species remain
         metaphlan_total = metaphlan_total.filter(like='|s__')
         # rename columns for better readability
         metaphlan_total = metaphlan_total.rename(columns=lambda x: x.split('|s__')[1])
-    
-    df_metadata = pd.read_csv(metadata, index_col=0)
-    metaphlan_total = pd.concat([metaphlan_total, df_metadata], axis=1)
-    metaphlan_total = metaphlan_total.set_index([metaphlan_total.index, 'disease'])
+
     return metaphlan_total.fillna(0)
 
 

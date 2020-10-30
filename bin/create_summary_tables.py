@@ -105,7 +105,7 @@ def main():
     parser.add_argument('--directory', '-d', required=True, help='directory containing the reports in individual directories with their name corresponding to sample name')
     parser.add_argument('--outdir', '-o', help='directory for output')
     parser.add_argument('--metadata', '-m', help='metadata file')
-    parser.add_argument('--species_filter', '-s', help='filter to species level?', default=False)
+    parser.add_argument('--species_filter', '-s', help='filter to species level?', action='store_true')
     args = parser.parse_args()
     
     if args.taxo == 'metaphlan':

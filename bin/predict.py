@@ -12,11 +12,12 @@ import random
 import argparse
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import StratifiedShuffleSplit
-from sklearn.metrics import roc_auc_score, confusion_matrix, plot_roc_curve, matthews_corrcoef
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import StratifiedShuffleSplit, GridSearchCV
+from sklearn.metrics import roc_auc_score, confusion_matrix, plot_roc_curve, matthews_corrcoef, balanced_accuracy_score, make_scorer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
+from sklearn.feature_selection import VarianceThreshold
 import matplotlib.pyplot as plt
 import time
  
@@ -27,23 +28,17 @@ def set_seed(seed_value):
     np.random.seed(seed_value) # 3. Set `numpy` pseudo-random generator at a fixed value
 
 def parseargs():
-    parser = argparse.ArgumentParser(description='Run RF with kraken2 or metaphlan')
+    parser = argparse.ArgumentParser(description='Predict phenotype with RF or SVM')
     parser.add_argument('--input', '-i', help='file containing report summary table')
-#    parser.add_argument('--taxo', '-t', choices=['metaphlan', 'kraken2'],
-#                        help='which taxonomic profiler has been used?')
     parser.add_argument('--seed', '-s', default=42, help='the seed for random values')
     parser.add_argument('--threads', default=-1, help='number of threads to be used for multithreading')
-    parser.add_argument('--loops', '-l', default=10, help='how many splits and loops for validating')
+    parser.add_argument('--loops_validation', '-lv', default=10, help='how many splits and loops for validating')
+    parser.add_argument('--loops_tuning', '-lt', default=10, help='how many splits and loops for hyperparameter tuning')
     parser.add_argument('--output', '-o', help='name of output file')
-    parser.add_argument('--classifier', '-c', choices=['RF', 'SVM'], help='which classifier to use')
-
+    parser.add_argument('--classifier', '-c', choices=['RF', 'SVM', 'L2linear'], help='which classifier to use')
+    parser.add_argument('--scorer', '-st', default='balanced_accuracy', help='The scoring function to use for hyperparameter tuning')
+    parser.add_argument('--varience_threshold', '-v', default=0, help='threshold for varience based feature selection')
     return parser.parse_args()
-
-
-# handling metadata
-def filter_metadata(md_total, df_summary):
-    metadata = pd.read_csv(md_total, index_col=0)
-    return metadata[metadata.index.isin(list(df_summary.index))]
 
 
 # spliting the datasets into test/train sets
@@ -74,14 +69,16 @@ def evaluate_performance(y_true, y_pred, y_pred_proba):
     else:
         precision, recall, f1 = 0.0, 0.0, 0.0
     mcc = matthews_corrcoef(y_true, y_pred)
-    return [auc, accuracy, precision, recall, f1, mcc]
+    balanced_accuracy = balanced_accuracy_score(y_true, y_pred)
+    return [auc, accuracy, precision, recall, f1, mcc, balanced_accuracy]
 
 
 # perform grid search of model with given param grid (dict of params and values to consider)
-def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, threads=-1, cv=5):
+def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, scorer, threads=-1, cv=5):
     gs = GridSearchCV(
         estimator=model,
-        param_grid=param_grid, 
+        param_grid=param_grid,
+        scoring=scorer,
         cv=cv, 
         n_jobs=threads, 
         verbose=2)
@@ -89,16 +86,17 @@ def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, thre
     return fitted_model
 
 
-# runs #loops^2, splits given set #loops times, then performs grid_search #loop times
+# runs #loops_validation * #loops_tuning, splits given set #loops_tuning times, then performs grid_search
 # returns the best hyperparameters (set of parameters with highest sum of mean_test_score)
-def param_fitting(X_train, X_test, y_train, y_test, loops, seed, model, param_grid):
+def param_fitting(X_train, X_test, y_train, y_test, loops_v, loops_t, seed, model, param_grid, scorer):
     cv_params = []
-    for i in range(loops):
+    
+    for i in range(loops_v):
  #       print(type(y_train[i]))
   #      print(X_train[i])
-        X_train_s, X_test_s, y_train_s, y_test_s = split_data(X_train[i], loops, seed)
-        for j in range(loops):
-            clf = grid_search(X_train_s[j], X_test_s[j], y_train_s[j], model, param_grid)
+        X_train_s, X_test_s, y_train_s, y_test_s = split_data(X_train[i], loops_t, seed)
+        for j in range(loops_t):
+            clf = grid_search(X_train_s[j], X_test_s[j], y_train_s[j], model, param_grid, scorer)
             cv_params.append(clf.cv_results_)
             
     df_total=pd.concat(map(lambda x: pd.DataFrame(x).set_index('params'), cv_params), axis=1)
@@ -106,19 +104,56 @@ def param_fitting(X_train, X_test, y_train, y_test, loops, seed, model, param_gr
     return best_params
     
 
+# report the evalation metrics to file
+def write_evaluation_file(args, best_prediction, hyper_params, time):
+    r = 5
+    bp = np.array(best_prediction)
+    with open(args.output+'.txt', 'w') as fh:
+        fh.write('Script parameters:\n')
+        fh.write(f'Input file: {args.input}\nClassifier: {args.classifier}\n')
+        fh.write(f'Validation loops: {args.loops_validation}\nTuning loops: {args.loops_tuning}\nTuning scorer: {args.scorer}\n')
+        fh.write(f'Execution time: {round(time/60, 3)} minutes')
+        fh.write('\nBest hyperparameters:\n')
+        fh.write(f'{hyper_params}\n')       
+        fh.write('\nMean values of evaluation runs with standard deviation:\n')     
+        fh.write(f'ROC: {round(np.mean(bp[:,0]), r)}\t{round(np.std(bp[:,0]), r)} \n')
+        fh.write(f'Accuracy: {round(np.mean(bp[:,1]), r)}\t{round(np.std(bp[:,1]), r)} \n')
+        fh.write(f'Precision: {round(np.mean(bp[:,2]), r)}\t{round(np.std(bp[:,2]), r)} \n')
+        fh.write(f'Recall: {round(np.mean(bp[:,3]), r)}\t{round(np.std(bp[:,3]), r)} \n')
+        fh.write(f'F1-Score: {round(np.mean(bp[:,4]), r)}\t{round(np.std(bp[:,4]), r)} \n')
+        fh.write(f'MCC: {round(np.mean(bp[:,5]), r)}\t{round(np.std(bp[:,5]), r)} \n')
+        fh.write(f'Balanced accuracy: {round(np.mean(bp[:,6]), r)}\t{round(np.std(bp[:,6]), r)} \n')
+
+        fh.write('\nAll evaluation scores:\nROC\tAccuracy\tPrecision\tRecall\tF1-Score\tMCC\tBalanced accuracy\n')
+        [fh.write(f'{round(i[0], r)}\t{round(i[1], r)}\t{round(i[2], r)}\t{round(i[3], r)}\t{round(i[4], r)}\t{round(i[5], r)}\t{round(i[6], r)} \n') for i in best_prediction]
+
+
+# report sorted feature importances of rf to csv file
+def write_fi_file(feature_importance, output, df_index):
+    fi_mean = np.mean(feature_importance, axis=0)
+    df_fi = pd.DataFrame(fi_mean, index=df_index, columns=['Feature Importance'])
+    df_fi = df_fi.sort_values('Feature Importance', ascending=False)
+    df_fi.to_csv(output+'_feature_importance.csv')
+
+
 def main():
     start_time = time.time()
     args=parseargs()
     seed = int(args.seed)
-    loops = int(args.loops)
+    loops_validation = int(args.loops_validation)
+    loops_tuning = int(args.loops_tuning)
     set_seed(seed)
+    if args.scorer == 'MCC':
+        scorer=make_scorer(matthews_corrcoef)
+    else:
+        scorer=args.scorer
 
-#    if args.taxo == 'metaphlan':
     df=pd.read_csv(args.input, index_col=[0,1], header=0)
-#    if args.taxo == 'kraken2':
-#        df=pd.read_csv(args.input, index_col=[0,1], header=0)
-    
-    X_train, X_test, y_train, y_test = split_data(df, loops, seed)
+    sel = VarianceThreshold(float(args.varience_threshold))
+    sel_cols = sel.fit(df).get_support(indices=True)
+    df = df.iloc[:,sel_cols]
+
+    X_train, X_test, y_train, y_test = split_data(df, loops_validation, seed)
     best_prediction = []
 
     tprs = []
@@ -126,68 +161,71 @@ def main():
     mean_fpr = np.linspace(0, 1, 100)
     fig, ax = plt.subplots(figsize=(10, 8))
 
-    # Random Forrest Classifier 
+    # Set grid for Random Forrest Classifier 
     if args.classifier == 'RF':
-        param_grid_rf = {
+        param_grid = {
             'n_estimators': [100, 500, 700, 1000],
             'max_depth': [2, 6, 10, None],
             'max_features': [0.33, 0.5, 1, 100, 'auto'],
             'min_samples_split': [2, 3],
             'criterion': ['gini', 'entropy']
-        }
-    
-        rf = RandomForestClassifier(random_state=seed)
-        best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, rf, param_grid_rf)
-    
-        proba, pred = [], []
-        best_rf = RandomForestClassifier(**best_params, random_state=seed)
-        #best_rf = RandomForestClassifier(n_estimators=500, max_depth=None, min_samples_split=2, n_jobs=-1, random_state=seed)
-        for i in range(loops):
-            best_rf.fit(X_train[i], y_train[i])
-            proba = best_rf.predict_proba(X_test[i])[:,1]
-            pred = best_rf.predict(X_test[i])
-            best_prediction.append(evaluate_performance(y_test[i], pred, proba))
-            # ROC plotting
-            viz = plot_roc_curve(best_rf, X_test[i], y_test[i],
-                         name='ROC fold {}'.format(i),
-                         alpha=0.3, lw=1, ax=ax)
-            interp_tpr = np.interp(mean_fpr, viz.fpr, viz.tpr)
-            interp_tpr[0] = 0.0
-            tprs.append(interp_tpr)
-            aucs.append(viz.roc_auc)
-
-    # SVM
+            }
+        clf = RandomForestClassifier(random_state=seed)
+        
+    # set grid for SVM
     if args.classifier == 'SVM':
-        param_grid_svm = {
+        param_grid = {
             'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
             'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0]
             }
-        svm = SVC(random_state=seed, probability=True)
-        best_params = param_fitting(X_train, X_test, y_train, y_test, loops, seed, svm, param_grid_svm)
-        best_svm = SVC(**best_params, random_state=seed, probability=True)
-        for i in range(loops):
-            best_svm.fit(X_train[i], y_train[i])
-            proba = best_svm.predict_proba(X_test[i])[:,1]
-            pred = best_svm.predict(X_test[i])
-            best_prediction.append(evaluate_performance(y_test[i], pred, proba))
-            # ROC plotting
-            viz = plot_roc_curve(best_svm, X_test[i], y_test[i],
-                         name='ROC fold {}'.format(i),
-                         alpha=0.3, lw=1, ax=ax)
-            interp_tpr = np.interp(mean_fpr, viz.fpr, viz.tpr)
-            interp_tpr[0] = 0.0
-            tprs.append(interp_tpr)
-            aucs.append(viz.roc_auc)   
-
-    # Round results to r digits
-    r = 5
-    bp = np.array(best_prediction)
-    mean_auc = np.mean(bp[:,0])
+        clf = SVC(random_state=seed, probability=True)
+        
+    if args.classifier == 'L2linear':
+        param_grid = {
+            #'dual': [True, False],
+            #'tol': [0.001, 0.0001, 0.00001, 0.000001],
+            'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0],
+            #'solver': ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga'],
+            'max_iter': [50, 100, 200, 500, 1000]
+            }
+        clf = LogisticRegression(random_state=seed)
+    
+    # Hyperparameter tuning
+    #best_params = param_fitting(X_train, X_test, y_train, y_test, loops_validation, loops_tuning, seed, clf, param_grid, scorer)
+    best_params = {'criterion': 'gini', 'max_depth': 6, 'max_features': 'auto', 'min_samples_split': 2, 'n_estimators': 700}
+    proba, pred, feature_importance = [], [], []
+    if args.classifier == 'RF':
+        best_clf = RandomForestClassifier(**best_params, random_state=seed)
+    if args.classifier == 'SVM':
+        best_clf = SVC(**best_params, random_state=seed, probability=True)
+    if args.classifier == 'L2linear':
+        best_clf = LogisticRegression(**best_params, random_state=seed)
+    
+    # Validation, evaluate performance and plot ROC
+    for i in range(loops_validation):
+        best_clf.fit(X_train[i], y_train[i])
+        proba = best_clf.predict_proba(X_test[i])[:,1]
+        pred = best_clf.predict(X_test[i])
+        best_prediction.append(evaluate_performance(y_test[i], pred, proba))
+        # ROC plotting
+        viz = plot_roc_curve(best_clf, X_test[i], y_test[i],
+                     name='ROC fold {}'.format(i),
+                     alpha=0.3, lw=1, ax=ax)
+        interp_tpr = np.interp(mean_fpr, viz.fpr, viz.tpr)
+        interp_tpr[0] = 0.0
+        tprs.append(interp_tpr)
+        aucs.append(viz.roc_auc)
+        print(viz.fpr)
+        print(viz.tpr)
+        print(interp_tpr)
+        print(viz.roc_auc)
+        if args.classifier == 'RF':
+            feature_importance.append(best_clf.feature_importances_)        
 
     # ROC plotting
+    mean_auc = np.mean(np.array(best_prediction)[:,0])
     ax.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r',
             label='Chance', alpha=.8)
-
     mean_tpr = np.mean(tprs, axis=0)
     mean_tpr[-1] = 1.0
     std_auc = np.std(aucs)
@@ -206,27 +244,16 @@ def main():
     ax.legend(loc="lower right")
     plt.savefig(args.output+'_roc.png')
 
-    print(f'Mean of ROC: {round(mean_auc, r)}')
-    print(f'--- {round((time.time()-start_time), 3)} seconds ---')
+    # console output
+    finish_time = time.time()-start_time
+    print(f'Mean of ROC: {round(mean_auc, 5)}')
+    print(f'--- {round(finish_time, 3)} seconds ---')
     
-    # Writing metric to output file
-    with open(args.output+'.txt', 'w') as fh:
-        fh.write('Script parameters:\n')
-        fh.write(f'Input file: {args.input}\nValidation loops: {args.loops}\nClassifier: {args.classifier}\n')
-        fh.write(f'Execution time: {round((time.time()-start_time)/60, 3)} minutes')
-        fh.write('\nBest hyperparameters:\n')
-        fh.write(f'{best_params}\n')       
-        fh.write('\nMean values of evaluation runs with standard deviation:\n')     
-        fh.write(f'ROC: {round(np.mean(bp[:,0]), r)}\t{round(np.std(bp[:,0]), r)} \n')
-        fh.write(f'Accuracy: {round(np.mean(bp[:,1]), r)}\t{round(np.std(bp[:,1]), r)} \n')
-        fh.write(f'Precision: {round(np.mean(bp[:,2]), r)}\t{round(np.std(bp[:,2]), r)} \n')
-        fh.write(f'Recall: {round(np.mean(bp[:,3]), r)}\t{round(np.std(bp[:,3]), r)} \n')
-        fh.write(f'F1-Score: {round(np.mean(bp[:,4]), r)}\t{round(np.std(bp[:,4]), r)} \n')
-        fh.write(f'MCC: {round(np.mean(bp[:,5]), r)}\t{round(np.std(bp[:,5]), r)} \n')
+    # Writing metrics to output file
+    write_evaluation_file(args, best_prediction, best_params, finish_time)
+    if args.classifier == 'RF':
+        write_fi_file(feature_importance, args.output, df.columns)
 
-        fh.write('\nAll evaluation scores:\nROC\tAccuracy\tPrecision\tRecall\tF1-Score\tMCC\n')
-        [fh.write(f'{round(i[0], r)}\t{round(i[1], r)}\t{round(i[2], r)}\t{round(i[3], r)}\t{round(i[4], r)}\t{round(i[5], r)} \n') for i in best_prediction]
 
-        
 if __name__ == '__main__':
     main()

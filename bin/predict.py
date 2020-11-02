@@ -13,12 +13,11 @@ import argparse
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedShuffleSplit, GridSearchCV
-from sklearn.metrics import roc_auc_score, confusion_matrix, plot_roc_curve, matthews_corrcoef, balanced_accuracy_score, make_scorer
+from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve, matthews_corrcoef, balanced_accuracy_score, make_scorer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.feature_selection import VarianceThreshold
-import matplotlib.pyplot as plt
 import time
  
 ###### For reproducable ML
@@ -56,7 +55,7 @@ def split_data(df_data, splits, seed_value):
     return X_train, X_test, y_train, y_test
 
 
-# Evaluation function: auc score, precision, accuracy, recall and f1
+# Evaluation function: auc score, precision, accuracy, recall, f1, mcc, balanced accuracy, tpr, fpr
 def evaluate_performance(y_true, y_pred, y_pred_proba):
     auc = roc_auc_score(y_true, y_pred_proba)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
@@ -92,8 +91,6 @@ def param_fitting(X_train, X_test, y_train, y_test, loops_v, loops_t, seed, mode
     cv_params = []
     
     for i in range(loops_v):
- #       print(type(y_train[i]))
-  #      print(X_train[i])
         X_train_s, X_test_s, y_train_s, y_test_s = split_data(X_train[i], loops_t, seed)
         for j in range(loops_t):
             clf = grid_search(X_train_s[j], X_test_s[j], y_train_s[j], model, param_grid, scorer)
@@ -105,13 +102,15 @@ def param_fitting(X_train, X_test, y_train, y_test, loops_v, loops_t, seed, mode
     
 
 # report the evalation metrics to file
-def write_evaluation_file(args, best_prediction, hyper_params, time):
+def write_evaluation_file(args, best_prediction, hyper_params, time, all_features, sel):
     r = 5
     bp = np.array(best_prediction)
     with open(args.output+'.txt', 'w') as fh:
         fh.write('Script parameters:\n')
         fh.write(f'Input file: {args.input}\nClassifier: {args.classifier}\n')
         fh.write(f'Validation loops: {args.loops_validation}\nTuning loops: {args.loops_tuning}\nTuning scorer: {args.scorer}\n')
+        fh.write(f'Varience threshold: {args.varience_threshold}\n')
+        fh.write(f'Selected features: {sel} ({all_features - sel} features removed)\n')
         fh.write(f'Execution time: {round(time/60, 3)} minutes')
         fh.write('\nBest hyperparameters:\n')
         fh.write(f'{hyper_params}\n')       
@@ -149,17 +148,12 @@ def main():
         scorer=args.scorer
 
     df=pd.read_csv(args.input, index_col=[0,1], header=0)
+    all_features = df.shape[1]
     sel = VarianceThreshold(float(args.varience_threshold))
     sel_cols = sel.fit(df).get_support(indices=True)
     df = df.iloc[:,sel_cols]
 
     X_train, X_test, y_train, y_test = split_data(df, loops_validation, seed)
-    best_prediction = []
-
-    tprs = []
-    aucs = []
-    mean_fpr = np.linspace(0, 1, 100)
-    fig, ax = plt.subplots(figsize=(10, 8))
 
     # Set grid for Random Forrest Classifier 
     if args.classifier == 'RF':
@@ -182,17 +176,17 @@ def main():
         
     if args.classifier == 'L2linear':
         param_grid = {
-            #'dual': [True, False],
-            #'tol': [0.001, 0.0001, 0.00001, 0.000001],
+            'dual': [True, False],
+            'tol': [0.001, 0.0001, 0.00001, 0.000001],
             'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0],
-            #'solver': ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga'],
+            'solver': ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga'],
             'max_iter': [50, 100, 200, 500, 1000]
             }
         clf = LogisticRegression(random_state=seed)
     
     # Hyperparameter tuning
-    #best_params = param_fitting(X_train, X_test, y_train, y_test, loops_validation, loops_tuning, seed, clf, param_grid, scorer)
-    best_params = {'criterion': 'gini', 'max_depth': 6, 'max_features': 'auto', 'min_samples_split': 2, 'n_estimators': 700}
+    best_params = param_fitting(X_train, X_test, y_train, y_test, loops_validation, loops_tuning, seed, clf, param_grid, scorer)
+    #best_params = {'criterion': 'gini', 'max_depth': 6, 'max_features': 'auto', 'min_samples_split': 2, 'n_estimators': 700}
     proba, pred, feature_importance = [], [], []
     if args.classifier == 'RF':
         best_clf = RandomForestClassifier(**best_params, random_state=seed)
@@ -200,59 +194,31 @@ def main():
         best_clf = SVC(**best_params, random_state=seed, probability=True)
     if args.classifier == 'L2linear':
         best_clf = LogisticRegression(**best_params, random_state=seed)
-    
+        
+    best_prediction, roc = [], []
     # Validation, evaluate performance and plot ROC
     for i in range(loops_validation):
         best_clf.fit(X_train[i], y_train[i])
         proba = best_clf.predict_proba(X_test[i])[:,1]
         pred = best_clf.predict(X_test[i])
         best_prediction.append(evaluate_performance(y_test[i], pred, proba))
-        # ROC plotting
-        viz = plot_roc_curve(best_clf, X_test[i], y_test[i],
-                     name='ROC fold {}'.format(i),
-                     alpha=0.3, lw=1, ax=ax)
-        interp_tpr = np.interp(mean_fpr, viz.fpr, viz.tpr)
-        interp_tpr[0] = 0.0
-        tprs.append(interp_tpr)
-        aucs.append(viz.roc_auc)
-        print(viz.fpr)
-        print(viz.tpr)
-        print(interp_tpr)
-        print(viz.roc_auc)
+        fpr, tpr, _ = roc_curve(y_test[i], proba)
+        roc.append([i, fpr, tpr])
+
         if args.classifier == 'RF':
             feature_importance.append(best_clf.feature_importances_)        
-
-    # ROC plotting
-    mean_auc = np.mean(np.array(best_prediction)[:,0])
-    ax.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r',
-            label='Chance', alpha=.8)
-    mean_tpr = np.mean(tprs, axis=0)
-    mean_tpr[-1] = 1.0
-    std_auc = np.std(aucs)
-    ax.plot(mean_fpr, mean_tpr, color='b',
-            label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
-            lw=2, alpha=.8)
-
-    std_tpr = np.std(tprs, axis=0)
-    tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
-    tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
-    ax.fill_between(mean_fpr, tprs_lower, tprs_upper, color='grey', alpha=.2,
-                    label=r'$\pm$ 1 std. dev.')
-
-    ax.set(xlim=[-0.05, 1.05], ylim=[-0.05, 1.05],
-           title=f"{args.classifier} Receiver Operating Curve")
-    ax.legend(loc="lower right")
-    plt.savefig(args.output+'_roc.png')
-
+            
     # console output
     finish_time = time.time()-start_time
-    print(f'Mean of ROC: {round(mean_auc, 5)}')
+    print(f'Mean of ROC: {round(np.mean(np.array(best_prediction)[:,0]), 5)}')
     print(f'--- {round(finish_time, 3)} seconds ---')
     
     # Writing metrics to output file
-    write_evaluation_file(args, best_prediction, best_params, finish_time)
+    write_evaluation_file(args, best_prediction, best_params, finish_time, all_features, df.shape[1])
     if args.classifier == 'RF':
         write_fi_file(feature_importance, args.output, df.columns)
+    with open(args.output+'_roc.txt', 'w') as fh:
+        [fh.write(f'Loop {i[0]}\nFPR\n{i[1]}\nTPR\n{i[2]}\n') for i in roc]
 
 
 if __name__ == '__main__':

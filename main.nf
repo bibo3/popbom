@@ -271,19 +271,33 @@ Channel.from(summary.collect{ [it.key, it.value] })
 /*
  * Parse software version numbers
  */
+
+process get_metaphlan_version {
+
+    output:
+    file "v_metaphlan.txt" into ch_metaphlan_version
+
+    script:
+    """
+    metaphlan --version > v_metaphlan.txt
+    """
+}
+
+
 process get_software_versions {
     publishDir "${params.outdir}/pipeline_info", mode: 'copy',
         saveAs: { filename ->
                       if (filename.indexOf(".csv") > 0) filename
                       else null
                 }
+    input:
+    file(metaphlan_version) from ch_metaphlan_version
 
     output:
     file 'software_versions_mqc.yaml' into ch_software_versions_yaml
     file "software_versions.csv"
 
     script:
-    // TODO nf-core: Get all tools to print their version number here
     """
     echo $workflow.manifest.version > v_pipeline.txt
     echo $workflow.nextflow.version > v_nextflow.txt
@@ -292,7 +306,7 @@ process get_software_versions {
     fastp -v 2> v_fastp.txt
     kraken2 -v > v_kraken2.txt
     centrifuge --version > v_centrifuge.txt
-    metaphlan -v > v_metaphlan.txt
+    #metaphlan -v > v_metaphlan.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
 }
@@ -663,7 +677,7 @@ if ( !params.skip_metaphlan) {
     process metaphlan_db_preparation {
         
         output:
-        path "$db" into ch_metaphlan_db
+        path "$db" into (ch_metaphlan_db, ch_metaphlan_db_strain)
 
         script:
         db = "metaphlan_db"
@@ -673,6 +687,7 @@ if ( !params.skip_metaphlan) {
     }
 } else {
     ch_metaphlan_db = Channel.fromPath(params.metaphlan_db)
+    ch_metaphlan_db_strain = Channel.fromPath(params.metaphlan_db)
 }
 
     trimmed_reads_metaphlan
@@ -691,7 +706,7 @@ if ( !params.skip_metaphlan) {
 
         output:
         file("metaphlan_report.txt")
-        file("mapping.bt2")
+        set val(name), file("mapping.bt2") into ch_metaphlan_strain
 
         script:
         def input = params.singleEnd ? "\"${reads}\"" :  "\"${reads[0]}\",\"${reads[1]}\""
@@ -704,6 +719,30 @@ if ( !params.skip_metaphlan) {
             --nproc "${task.cpus}" \
             --read_min_len "${metaphlan_read_min_len}" \
             -o metaphlan_report.txt
+        """
+    }
+
+    ch_metaphlan_strain.combine(ch_metaphlan_db_strain).set { ch_metaphlan_strain_input }
+
+    process strain {
+    tag "${name}"
+        publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy',
+                saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+
+        input:
+        tuple val(name), file(mapping), file(db) from ch_metaphlan_strain_input 
+
+        output:
+        file("metaphlan_marker_report.txt")
+
+        """
+        metaphlan \
+            -t marker_pres_table \
+            "${mapping}" \
+            --input_type bowtie2out \
+            --bowtie2db "${db}" \
+            --nproc "${task.cpus}" \
+            -o metaphlan_marker_report.txt
         """
     }
 }

@@ -59,8 +59,8 @@ def split_data(df_data, splits, seed_value):
 # Evaluation function: auc score, precision, accuracy, recall, f1, mcc, balanced accuracy, tpr, fpr
 def evaluate_performance(y_true, y_pred, y_pred_proba):
     auc = roc_auc_score(y_true, y_pred_proba)
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    confusion = [tn, fp, fn, tp]
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0,1]).ravel()
+    confusion = [tp, fp, fn, tn]
     accuracy = (tp + tn) / (tp + fp + tn + fn)
     if tp > 0.0:
         precision = tp / (tp + fp)
@@ -202,7 +202,6 @@ def main():
 
     # Hyperparameter tuning
     best_params = param_fitting(X_train, X_test, y_train, y_test, loops_validation, loops_tuning, seed, clf, param_grid, scorer)
-    #best_params = {'criterion': 'gini', 'max_depth': 6, 'max_features': 'auto', 'min_samples_split': 2, 'n_estimators': 700}
     proba, pred, feature_importance = [], [], []
     if args.classifier == 'RF':
         best_clf = RandomForestClassifier(**best_params, random_state=seed)
@@ -212,7 +211,6 @@ def main():
         best_clf = LogisticRegression(**best_params, random_state=seed)
     if args.classifier == 'XGB':
         best_clf = xgb.XGBClassifier(**best_params, objective='binary:logistic', random_state=seed)
-        #best_clf = xgb.XGBClassifier(n_estimators=best_params['n_estimators'], max_depth=best_params['max_depth'], learning_rate=best_params['learning_rate'], objective='binary:logistic', random_state=seed)
         
     best_prediction, roc = [], []
     # Validation, evaluate performance and plot ROC
@@ -231,10 +229,7 @@ def main():
     finish_time = time.time()-start_time
     print(f'Mean of ROC: {round(np.mean(np.array(best_prediction)[:,0]), 5)}')
     print(f'--- {round(finish_time, 3)} seconds ---')
-    print(best_prediction)
-    print(best_params)
-    print(best_clf.get_params())
-    print(len(feature_importance))
+
     # Writing metrics to output file
     write_evaluation_file(args, best_prediction, best_params, finish_time, all_features, df.shape[1])
     if args.classifier == 'RF' or args.classifier == 'XGB':

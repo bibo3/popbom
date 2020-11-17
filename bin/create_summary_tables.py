@@ -42,7 +42,6 @@ def reading_kraken2(basepath, metadata, species):
     kraken_total = pd.concat([kraken_total, df_metadata], axis=1)
 
     kraken_total = kraken_total.set_index([kraken_total.index, 'disease'])
-#    kraken_total=kraken_total[kraken_total.iloc[:,[1]].notnull()]
     return kraken_total.dropna()
 
 
@@ -75,7 +74,9 @@ def reading_metaphlan(basepath, metadata, species):
         metaphlan_total = metaphlan_total.filter(like='|s__')
         # rename columns for better readability
         metaphlan_total = metaphlan_total.rename(columns=lambda x: x.split('|s__')[1])
-
+        
+    # rename columns for XGBoost
+    metaphlan_total = metaphlan_total.rename(columns=lambda x: x.replace('[','(').replace(']',')').replace('<','_'))
     return metaphlan_total.fillna(0)
 
 
@@ -92,9 +93,15 @@ def reading_mpa_marker(basepath, metadata):
                         names=('marker_name', file.split('/')[-2]), 
                         index_col='marker_name').T, 
             m_path))
+    if 'HV1' in metaphlan_total.index:
+        metaphlan_total.index=metaphlan_total.index.str.replace('V','V-')
+    if 'MetaHIT-MH0001' in metaphlan_total.index:
+        metaphlan_total.index=metaphlan_total.index.str.replace('MetaHIT-M','M')
+    
     df_metadata = pd.read_csv(metadata, index_col=0)
     metaphlan_total = pd.concat([metaphlan_total, df_metadata], axis=1)
     metaphlan_total = metaphlan_total.set_index([metaphlan_total.index, 'disease'])
+    metaphlan_total = metaphlan_total.rename(columns=lambda x: x.replace('[','(').replace(']',')').replace('<','_'))
     return metaphlan_total.fillna(0)
 
 

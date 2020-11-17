@@ -17,6 +17,7 @@ from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve, matthews
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
+import xgboost as xgb
 from sklearn.feature_selection import VarianceThreshold
 import time
  
@@ -34,7 +35,7 @@ def parseargs():
     parser.add_argument('--loops_validation', '-lv', default=10, help='how many splits and loops for validating')
     parser.add_argument('--loops_tuning', '-lt', default=10, help='how many splits and loops for hyperparameter tuning')
     parser.add_argument('--output', '-o', help='name of output file')
-    parser.add_argument('--classifier', '-c', choices=['RF', 'SVM', 'L2linear'], help='which classifier to use')
+    parser.add_argument('--classifier', '-c', choices=['RF', 'SVM', 'L2linear', 'XGB'], help='which classifier to use')
     parser.add_argument('--scorer', '-st', default='balanced_accuracy', help='The scoring function to use for hyperparameter tuning')
     parser.add_argument('--varience_threshold', '-v', default=0, help='threshold for varience based feature selection')
     return parser.parse_args()
@@ -59,7 +60,7 @@ def split_data(df_data, splits, seed_value):
 def evaluate_performance(y_true, y_pred, y_pred_proba):
     auc = roc_auc_score(y_true, y_pred_proba)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    
+    confusion = [tn, fp, fn, tp]
     accuracy = (tp + tn) / (tp + fp + tn + fn)
     if tp > 0.0:
         precision = tp / (tp + fp)
@@ -69,7 +70,7 @@ def evaluate_performance(y_true, y_pred, y_pred_proba):
         precision, recall, f1 = 0.0, 0.0, 0.0
     mcc = matthews_corrcoef(y_true, y_pred)
     balanced_accuracy = balanced_accuracy_score(y_true, y_pred)
-    return [auc, accuracy, precision, recall, f1, mcc, balanced_accuracy]
+    return [auc, accuracy, precision, recall, f1, mcc, balanced_accuracy, confusion]
 
 
 # perform grid search of model with given param grid (dict of params and values to consider)
@@ -104,7 +105,7 @@ def param_fitting(X_train, X_test, y_train, y_test, loops_v, loops_t, seed, mode
 # report the evalation metrics to file
 def write_evaluation_file(args, best_prediction, hyper_params, time, all_features, sel):
     r = 5
-    bp = np.array(best_prediction)
+    bp = np.array(best_prediction,dtype=object)
     with open(args.output+'.txt', 'w') as fh:
         fh.write('Script parameters:\n')
         fh.write(f'Input file: {args.input}\nClassifier: {args.classifier}\n')
@@ -125,6 +126,8 @@ def write_evaluation_file(args, best_prediction, hyper_params, time, all_feature
 
         fh.write('\nAll evaluation scores:\nROC\tAccuracy\tPrecision\tRecall\tF1-Score\tMCC\tBalanced accuracy\n')
         [fh.write(f'{round(i[0], r)}\t{round(i[1], r)}\t{round(i[2], r)}\t{round(i[3], r)}\t{round(i[4], r)}\t{round(i[5], r)}\t{round(i[6], r)} \n') for i in best_prediction]
+        fh.write('\nConsfusion Matrices:\n')
+        [fh.write(f'TP: {i[7][0]}\tFP: {i[7][1]}\tFN: {i[7][2]}\tTN: {i[7][3]}\n') for i in best_prediction]
 
 
 # report sorted feature importances of rf to csv file
@@ -162,7 +165,8 @@ def main():
             'max_depth': [2, 6, 10, None],
             'max_features': [0.33, 0.5, 1, 100, 'auto'],
             'min_samples_split': [2, 3],
-            'criterion': ['gini', 'entropy']
+            'criterion': ['gini', 'entropy'],
+            'class_weight': ['balanced', 'balanced_subsample', None]
             }
         clf = RandomForestClassifier(random_state=seed)
         
@@ -184,6 +188,18 @@ def main():
             }
         clf = LogisticRegression(random_state=seed)
     
+    if args.classifier == 'XGB':
+        param_grid = {
+            'n_estimators': [5, 10, 50],
+            'max_depth': [2, 10, None],
+            'learning_rate': [0.3, 0.2, 0.1],
+            'gamma': [0, 1, 5],
+            'min_child_weight': [1, 3, 6],
+            'subsample': [0.5, 0.6, 0.7, 1],
+            'colsample_bytree': [0.5, 0.6, 0.7, 1]
+            }
+        clf = xgb.XGBClassifier(objective='binary:logistic', random_state=seed)
+
     # Hyperparameter tuning
     best_params = param_fitting(X_train, X_test, y_train, y_test, loops_validation, loops_tuning, seed, clf, param_grid, scorer)
     #best_params = {'criterion': 'gini', 'max_depth': 6, 'max_features': 'auto', 'min_samples_split': 2, 'n_estimators': 700}
@@ -194,6 +210,9 @@ def main():
         best_clf = SVC(**best_params, random_state=seed, probability=True)
     if args.classifier == 'L2linear':
         best_clf = LogisticRegression(**best_params, random_state=seed)
+    if args.classifier == 'XGB':
+        best_clf = xgb.XGBClassifier(**best_params, objective='binary:logistic', random_state=seed)
+        #best_clf = xgb.XGBClassifier(n_estimators=best_params['n_estimators'], max_depth=best_params['max_depth'], learning_rate=best_params['learning_rate'], objective='binary:logistic', random_state=seed)
         
     best_prediction, roc = [], []
     # Validation, evaluate performance and plot ROC
@@ -205,17 +224,20 @@ def main():
         fpr, tpr, _ = roc_curve(y_test[i], proba)
         roc.append([i, fpr, tpr])
 
-        if args.classifier == 'RF':
+        if args.classifier == 'RF' or args.classifier == 'XGB':
             feature_importance.append(best_clf.feature_importances_)        
             
     # console output
     finish_time = time.time()-start_time
     print(f'Mean of ROC: {round(np.mean(np.array(best_prediction)[:,0]), 5)}')
     print(f'--- {round(finish_time, 3)} seconds ---')
-    
+    print(best_prediction)
+    print(best_params)
+    print(best_clf.get_params())
+    print(len(feature_importance))
     # Writing metrics to output file
     write_evaluation_file(args, best_prediction, best_params, finish_time, all_features, df.shape[1])
-    if args.classifier == 'RF':
+    if args.classifier == 'RF' or args.classifier == 'XGB':
         write_fi_file(feature_importance, args.output, df.columns)
     with open(args.output+'_roc.txt', 'w') as fh:
         [fh.write(f'Loop {i[0]}\nFPR\n{i[1]}\nTPR\n{i[2]}\n') for i in roc]

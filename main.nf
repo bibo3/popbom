@@ -76,7 +76,6 @@ if (params.genomes && params.genome && !params.genomes.containsKey(params.genome
 }
 */
 
-// TODO nf-core: Add any reference files that are needed
 
 // Has the run name been specified by the user?
 //  this has the bonus effect of catching both -name and --name
@@ -124,7 +123,23 @@ params.metaphlan_read_min_len = 20
  * ML options
  */
 params.metadata = false
-params.filter_species = true
+params.filter_species = false
+params.seed = 42
+params.loops_validation = 10
+params.loops_tuning = 10
+params.varience_threshold = false
+params.scorer = false
+params.rf = false
+params.svm = false
+params.xgboost = false
+params.l2linear = false
+
+
+classifier_list = []
+if(params.rf) { classifier_list.add('RF') } 
+if(params.svm) { classifier_list.add('SVM') } 
+if(params.xgboost) { classifier_list.add('XGB') } 
+if(params.l2linear) { classifier_list.add('L2linear') } 
 
 /*
  * Check if parameters for host contamination removal are valid and create channels
@@ -280,7 +295,7 @@ Channel.from(summary.collect{ [it.key, it.value] })
  * Parse software version numbers
  */
 
-process get_metaphlan_version {
+process GET_METAPHLAN_VERSION {
 
     output:
     file "v_metaphlan.txt" into ch_metaphlan_version
@@ -292,7 +307,7 @@ process get_metaphlan_version {
 }
 
 
-process get_software_versions {
+process GET_SOFTWARE_VERSIONS {
     publishDir "${params.outdir}/pipeline_info", mode: 'copy',
         saveAs: { filename ->
                       if (filename.indexOf(".csv") > 0) filename
@@ -323,7 +338,7 @@ process get_software_versions {
 /*
  * STEP 1 - Read trimming and pre/post qc
  */
-process fastqc_raw {
+process FASTQC_RAW {
     tag "$name"
     publishDir "${params.outdir}/", mode: 'copy',
             saveAs: {filename -> filename.indexOf(".zip") == -1 ? "QC_shortreads/fastqc/$filename" : null}
@@ -341,7 +356,7 @@ process fastqc_raw {
 }
 
 
-process fastp {
+process FASTP {
     tag "$name"
     publishDir "${params.outdir}/", mode: 'copy',
             saveAs: {filename -> filename.indexOf(".fastq.gz") == -1 ? "QC_shortreads/fastp/$name/$filename" : null}
@@ -389,7 +404,7 @@ process fastp {
  */
 (trimmed_reads, ch_trimmed_reads_remove_host) = trimmed_reads.into(2)
 
-process host_bowtie2index {
+process HOST_BOWTIE2INDEX {
     tag "${genome}"
 
     input:
@@ -406,7 +421,7 @@ process host_bowtie2index {
     """
 }
 
-process remove_host {
+process REMOVE_HOST {
     tag "${name}"
 
     publishDir "${params.outdir}/QC_shortreads/remove_host/", mode: params.publish_dir_mode,
@@ -470,10 +485,9 @@ else ch_trimmed_reads_remove_host.close()
 
 /*
  * Remove PhiX contamination from Illumina reads
- * TODO: PhiX into/from iGenomes.conf?
  */
 if(!params.keep_phix) {
-    process phix_download_db {
+    process PHIX_DOWNLOAD_DB {
         tag "${genome}"
 
         input:
@@ -488,7 +502,7 @@ if(!params.keep_phix) {
         """
     }
 
-    process remove_phix {
+    process REMOVE_PHIX {
         tag "$name"
 
         publishDir "${params.outdir}", mode: 'copy',
@@ -524,7 +538,7 @@ if(!params.keep_phix) {
 }
 
 
-process fastqc_trimmed {
+process FASTQC_TRIMMED {
     tag "$name"
     publishDir "${params.outdir}/", mode: 'copy',
             saveAs: {filename -> filename.indexOf(".zip") == -1 ? "QC_shortreads/fastqc/$filename" : null}
@@ -555,7 +569,7 @@ process fastqc_trimmed {
 
 // TODO rewrite channel io
 if ( !params.skip_centrifuge ) {
-        process centrifuge_db_preparation {
+        process CENTRIFUGE_DB_PREPARATION {
             input:
             file(db) from centrifuge_db
 
@@ -573,7 +587,7 @@ if ( !params.skip_centrifuge ) {
             .combine(centrifuge_database)
             .set { centrifuge_input }
 
-    process centrifuge {
+    process CENTRIFUGE {
         tag "${name}-${db_name}"
         publishDir "${params.outdir}/Taxonomy/centrifuge/${name}", mode: 'copy',
                 saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
@@ -607,6 +621,7 @@ if ( !params.skip_kraken2) {
 	if ( params.kraken2_db ) {
     file(params.kraken2_db, checkIfExists: true)
 	    if (params.kraken2_db.endsWith('.tar.gz') || params.kraken2_db.endsWith('.tgz')) {
+
         process UNTAR_KRAKEN2_DB {
             label 'error_retry'
             if (params.save_reference) {
@@ -652,10 +667,10 @@ if ( !params.skip_kraken2) {
             """
         }
     }
-    process kraken2 {
+
+    process KRAKEN2 {
         tag "${name}"
-        publishDir "${params.outdir}/Taxonomy/kraken2/${name}", mode: 'copy',
-                saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+        publishDir "${params.outdir}/Taxonomy/kraken2/${name}", mode: 'copy'
 
         input:
         tuple val(name), file(reads) from trimmed_reads_kraken2
@@ -677,9 +692,11 @@ if ( !params.skip_kraken2) {
     }
 } else { ch_kraken_reports = Channel.from() } 
 
+
 if ( !params.skip_metaphlan) {
 	if ( !params.metaphlan_db ) {
-    process metaphlan_db_preparation {
+
+    process METAPHLAN_DB_PREPARATION {
         
         output:
         path "$db" into (ch_metaphlan_db, ch_metaphlan_db_strain)
@@ -700,13 +717,13 @@ if ( !params.skip_metaphlan) {
             .set { ch_metaphlan_input }
 
 
-    process metaphlan {
+    process METAPHLAN {
         tag "${name}"
         publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy'
 
         input:
         tuple val(name), file(reads), file(db) from ch_metaphlan_input
-        val(metaphlan_read_min_len) from params.metaphlan_read_min_len
+        val metaphlan_read_min_len from params.metaphlan_read_min_len
 
         output:
         file("*.txt") into ch_metaphlan_report
@@ -729,7 +746,7 @@ if ( !params.skip_metaphlan) {
 
     ch_metaphlan_strain.combine(ch_metaphlan_db_strain).set { ch_metaphlan_strain_input }
 
-    process strain {
+    process STRAIN {
     tag "${name}"
         publishDir "${params.outdir}/Taxonomy/metaphlan_strain/${name}", mode: 'copy'
 
@@ -751,7 +768,7 @@ if ( !params.skip_metaphlan) {
     }
 }
 
-process taxo_report_summary {
+process TAXO_REPORT_SUMMARY {
     publishDir "${params.outdir}/summary_tables", mode: 'copy'
  
     input:
@@ -761,7 +778,7 @@ process taxo_report_summary {
     file kraken from ch_kraken_reports.collect()
 
     output:
-    file("*.csv") into (ch_reports_summary_rf, ch_reports_summary_xgb)
+    file("*.csv") into ch_reports_summary
 
     script:
     def metaphlan = params.skip_metaphlan ? "" : "--metaphlan \"$mpa\" --mpa_marker \"$mpa_marker\""
@@ -777,13 +794,46 @@ process taxo_report_summary {
 }
 
 
+process MODEL_TRAINING {
+    tag "${filename}-${classifier}"
+    publishDir "${params.outdir}/classification_metrics/${classifier}", mode: 'copy'
+    input:
+    each file from ch_reports_summary
+    val seed from params.seed
+    val lv from params.loops_validation
+    val lt from params.loops_tuning
+    val scorer from params.scorer
+    each classifier from classifier_list
+    val vt from params.varience_threshold
+
+    output:
+    file("*")
+
+    script:
+    filename = file.toString().replace(".csv", "").tokenize('/')[-1]
+    varience = params.varience_threshold ? "--varience_threshold " + params.varience_threshold : ''
+    """
+    predict.py \
+    --input $file \
+    --seed $seed \
+    --threads "${task.cpus}" \
+    --loops_validation $lv \
+    --loops_tuning $lt \
+    --classifier $classifier \
+    --scorer $scorer \
+    $varience \
+    --output ${filename}_${classifier}
+    """
+
+}
 
 
 
 /*
  * MultiQC
  */
-process multiqc {
+/*
+process MULTIQC {
     publishDir "${params.outdir}/MultiQC", mode: 'copy'
 
     input:
@@ -820,11 +870,12 @@ process multiqc {
         """
     }
 }
+*/
 
 /*
  * Output Description HTML
  */
-process output_documentation {
+process OUTPUT_DOCUMENTATION {
     publishDir "${params.outdir}/pipeline_info", mode: 'copy'
 
     input:

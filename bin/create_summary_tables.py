@@ -12,17 +12,15 @@ import argparse
 
 # reading in kraken2 reports
 def reading_kraken2(basepath, metadata, species):
-    # setting glob path
-    k_path = glob.glob(basepath + "/*/kraken2_report.txt")
     # filenames become the index
     kraken_total = pd.concat(
         map(lambda file: 
             pd.read_csv(file, 
                         sep='\t', 
-                        names=('rel_ab', file.split('/')[-2], 'assigned', 'rank', 'tax_id', 'sci_name'), 
+                        names=('rel_ab', file.split('.')[0], 'assigned', 'rank', 'tax_id', 'sci_name'), 
                         usecols=(1,3,4,5), 
                         index_col=('tax_id','sci_name','rank')).T,
-            k_path))
+            basepath.split()))
     
     if 'HV1' in kraken_total.index:
         kraken_total.index=kraken_total.index.str.replace('V','V-')
@@ -47,18 +45,17 @@ def reading_kraken2(basepath, metadata, species):
 
 # reading in metaphlan reports
 def reading_metaphlan(basepath, metadata, species):
-    # setting glob path    
-    m_path =  glob.glob(basepath + "/*/metaphlan_report.txt")
     # clade names become column names, filenames the index 
     metaphlan_total = pd.concat(
         map(lambda file: 
             pd.read_csv(file, 
                         sep='\t', 
                         skiprows=4, 
-                        names=('clade_name', 'path', file.split('/')[-2], 'add_clades'), 
+                        names=('clade_name', 'path', file.split('.')[0], 'add_clades'), 
                         usecols=(0,2), 
                         index_col='clade_name').T, 
-            m_path))
+            basepath.split()))
+
     if 'HV1' in metaphlan_total.index:
         metaphlan_total.index=metaphlan_total.index.str.replace('V','V-')
     if 'MetaHIT-MH0001' in metaphlan_total.index:
@@ -82,17 +79,15 @@ def reading_metaphlan(basepath, metadata, species):
 
 # reading in marker based metaphlan reports
 def reading_mpa_marker(basepath, metadata):
-    # setting glob path    
-    m_path =  glob.glob(basepath + "/*/metaphlan_marker_report.txt")
     # clade names become column names, filenames the index 
     metaphlan_total = pd.concat(
         map(lambda file: 
             pd.read_csv(file, 
                         sep='\t', 
                         skiprows=4, 
-                        names=('marker_name', file.split('/')[-2]), 
+                        names=('marker_name', file.split('.')[0]), 
                         index_col='marker_name').T, 
-            m_path))
+            basepath.split()))
     if 'HV1' in metaphlan_total.index:
         metaphlan_total.index=metaphlan_total.index.str.replace('V','V-')
     if 'MetaHIT-MH0001' in metaphlan_total.index:
@@ -107,25 +102,25 @@ def reading_mpa_marker(basepath, metadata):
 
 def main():
     # read in reports and write to a single file
-    parser = argparse.ArgumentParser(description='Run RF with kraken2 or metaphlan')
-    parser.add_argument('--taxo', '-t', choices=['metaphlan', 'kraken2', 'centrifuge', 'mpa_marker'], required=True, help='which taxonomic profiler is used?')
-    parser.add_argument('--directory', '-d', required=True, help='directory containing the reports in individual directories with their name corresponding to sample name')
-    parser.add_argument('--outdir', '-o', help='directory for output')
+    parser = argparse.ArgumentParser(description='Create summary tables for kraken2 and metaphlan reports')
+    parser.add_argument('--metaphlan', help='metaphlan report files to be summarized')
+    parser.add_argument('--kraken2', help='kraken2 report files to be summarized')
+    parser.add_argument('--mpa_marker', help='metaphlan strain report files to be summarized')
     parser.add_argument('--metadata', '-m', help='metadata file')
     parser.add_argument('--species_filter', '-s', help='filter to species level?', action='store_true')
     args = parser.parse_args()
     
-    if args.taxo == 'metaphlan':
-        mpa = reading_metaphlan(args.directory, args.metadata, args.species_filter)
-        mpa.to_csv(args.outdir+'/metaphlan_table.csv')
+    if args.metaphlan:
+        df = reading_metaphlan(args.metaphlan, args.metadata, args.species_filter)
+        df.to_csv('metaphlan_table.csv')
         
-    if args.taxo == 'kraken2':
-        kraken = reading_kraken2(args.directory, args.metadata, args.species_filter)
-        kraken.to_csv(args.outdir+'/kraken2_table.csv')
+    if args.kraken2:
+        df = reading_kraken2(args.kraken2, args.metadata, args.species_filter)
+        df.to_csv('kraken2_table.csv')
         
-    if args.taxo == 'mpa_marker':
-        mpa = reading_mpa_marker(args.directory, args.metadata)
-        mpa.to_csv(args.outdir+'/metaphlan_marker_table.csv')
+    if args.mpa_marker:
+        df = reading_mpa_marker(args.mpa_marker, args.metadata)
+        df.to_csv('metaphlan_marker_table.csv')
 
 
 if __name__ == '__main__':

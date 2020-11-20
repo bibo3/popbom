@@ -118,6 +118,14 @@ params.skip_metaphlan = false
 params.metaphlan_db = false
 params.metaphlan_read_min_len = 20
 
+
+
+/*
+ * ML options
+ */
+params.metadata = false
+params.filter_species = true
+
 /*
  * Check if parameters for host contamination removal are valid and create channels
  */
@@ -654,8 +662,7 @@ if ( !params.skip_kraken2) {
         file(kraken2_db) from ch_kraken2_db
 
         output:
-        set val("kraken2"), val(name), file("results.krona") into kraken2_to_krona
-        file("kraken2_report.txt")
+        file("*.txt") into ch_kraken_reports
 
         script:
         def input = params.singleEnd ? "\"${reads}\"" :  "--paired \"${reads[0]}\" \"${reads[1]}\""
@@ -664,13 +671,11 @@ if ( !params.skip_kraken2) {
             --report-zero-counts \
             --threads "${task.cpus}" \
             --db "${kraken2_db}"  \
-            --report kraken2_report.txt \
-            $input \
-            > kraken2.kraken
-        cat kraken2.kraken | cut -f 2,3 > results.krona
+            --report ${name}.txt \
+            $input
         """
     }
-}
+} else { ch_kraken_reports = Channel.from() } 
 
 if ( !params.skip_metaphlan) {
 	if ( !params.metaphlan_db ) {
@@ -697,16 +702,16 @@ if ( !params.skip_metaphlan) {
 
     process metaphlan {
         tag "${name}"
-        publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy',
-                saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+        publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy'
 
         input:
         tuple val(name), file(reads), file(db) from ch_metaphlan_input
         val(metaphlan_read_min_len) from params.metaphlan_read_min_len
 
         output:
-        file("metaphlan_report.txt")
-        set val(name), file("mapping.bt2") into ch_metaphlan_strain
+        file("*.txt") into ch_metaphlan_report
+        //tuple val(name), path("*.txt") into ch_metaphlan_report
+        tuple val(name), file("mapping.bt2") into ch_metaphlan_strain
 
         script:
         def input = params.singleEnd ? "\"${reads}\"" :  "\"${reads[0]}\",\"${reads[1]}\""
@@ -718,7 +723,7 @@ if ( !params.skip_metaphlan) {
             --bowtie2out mapping.bt2 \
             --nproc "${task.cpus}" \
             --read_min_len "${metaphlan_read_min_len}" \
-            -o metaphlan_report.txt
+            -o ${name}.mpa.txt
         """
     }
 
@@ -726,14 +731,13 @@ if ( !params.skip_metaphlan) {
 
     process strain {
     tag "${name}"
-        publishDir "${params.outdir}/Taxonomy/metaphlan/${name}", mode: 'copy',
-                saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+        publishDir "${params.outdir}/Taxonomy/metaphlan_strain/${name}", mode: 'copy'
 
         input:
         tuple val(name), file(mapping), file(db) from ch_metaphlan_strain_input 
 
         output:
-        file("metaphlan_marker_report.txt")
+        file("*.txt") into ch_metaphlan_strain_report
 
         """
         metaphlan \
@@ -742,10 +746,39 @@ if ( !params.skip_metaphlan) {
             --input_type bowtie2out \
             --bowtie2db "${db}" \
             --nproc "${task.cpus}" \
-            -o metaphlan_marker_report.txt
+            -o ${name}.marker.txt
         """
     }
 }
+
+process taxo_report_summary {
+    publishDir "${params.outdir}/summary_tables", mode: 'copy'
+ 
+    input:
+    path meta from params.metadata
+    file mpa from ch_metaphlan_report.collect()
+    file mpa_marker from ch_metaphlan_strain_report.collect()
+    file kraken from ch_kraken_reports.collect()
+
+    output:
+    file("*.csv") into (ch_reports_summary_rf, ch_reports_summary_xgb)
+
+    script:
+    def metaphlan = params.skip_metaphlan ? "" : "--metaphlan \"$mpa\" --mpa_marker \"$mpa_marker\""
+    def kraken2 = params.skip_kraken2 ? "" : "--kraken2 \"$kraken\""
+    def species = params.filter_species ? "--species_filter": ""
+    """
+    create_summary_tables.py \
+        --metadata $meta \
+        $species \
+        $metaphlan \
+        $kraken2
+    """
+}
+
+
+
+
 
 /*
  * MultiQC

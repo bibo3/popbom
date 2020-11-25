@@ -126,7 +126,7 @@ def write_evaluation_file(args, best_prediction, hyper_params, time, all_feature
 
         fh.write('\nAll evaluation scores:\nROC\tAccuracy\tPrecision\tRecall\tF1-Score\tMCC\tBalanced accuracy\n')
         [fh.write(f'{round(i[0], r)}\t{round(i[1], r)}\t{round(i[2], r)}\t{round(i[3], r)}\t{round(i[4], r)}\t{round(i[5], r)}\t{round(i[6], r)} \n') for i in best_prediction]
-        fh.write('\nConsfusion Matrices:\n')
+        fh.write('\nConfusion Matrices:\n')
         [fh.write(f'TP: {i[7][0]}\tFP: {i[7][1]}\tFN: {i[7][2]}\tTN: {i[7][3]}\n') for i in best_prediction]
 
 

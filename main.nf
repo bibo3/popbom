@@ -813,7 +813,7 @@ process MODEL_TRAINING {
     filename = file.toString().replace(".csv", "").tokenize('/')[-1]
     varience = params.varience_threshold ? "--varience_threshold " + params.varience_threshold : ''
     """
-    predict.py \
+    train.py \
     --input $file \
     --seed $seed \
     --threads "${task.cpus}" \
@@ -832,7 +832,7 @@ process MODEL_TRAINING {
 /*
  * MultiQC
  */
-/*
+
 process MULTIQC {
     publishDir "${params.outdir}/MultiQC", mode: 'copy'
 
@@ -870,7 +870,7 @@ process MULTIQC {
         """
     }
 }
-*/
+
 
 /*
  * Output Description HTML

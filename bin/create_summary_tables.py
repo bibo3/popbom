@@ -6,7 +6,6 @@ Created on Thu Jul 23 17:57:37 2020
 @author: matt
 """
 import pandas as pd
-import glob
 import argparse
 
 
@@ -106,6 +105,7 @@ def main():
     parser.add_argument('--metaphlan', help='metaphlan report files to be summarized')
     parser.add_argument('--kraken2', help='kraken2 report files to be summarized')
     parser.add_argument('--mpa_marker', help='metaphlan strain report files to be summarized')
+    parser.add_argument('--combine', help='combine mpa report on species level with strain report')
     parser.add_argument('--metadata', '-m', help='metadata file')
     parser.add_argument('--species_filter', '-s', help='filter to species level?', action='store_true')
     args = parser.parse_args()
@@ -121,6 +121,12 @@ def main():
     if args.mpa_marker:
         df = reading_mpa_marker(args.mpa_marker, args.metadata)
         df.to_csv('metaphlan_marker_table.csv')
+        
+    if args.combine:
+        mpa = reading_metaphlan(args.metaphlan, args.metadata, True)
+        marker = reading_mpa_marker(args.mpa_marker, args.metadata)
+        df = pd.concat([mpa, marker], axis=1)
+        df.to_csv(args.outdir+'/strain_species.csv')
 
 
 if __name__ == '__main__':

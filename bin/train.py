@@ -19,6 +19,7 @@ from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 import xgboost as xgb
 from sklearn.feature_selection import VarianceThreshold
+from joblib import dump
 import time
  
 ###### For reproducable ML
@@ -173,8 +174,8 @@ def main():
     # set grid for SVM
     if args.classifier == 'SVM':
         param_grid = {
-            'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
-            'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0]
+            'kernel': ['linear', 'poly'],# 'rbf', 'sigmoid'],
+            'C': [0.25, 0.5, 0.75, 1.0]#, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0]
             }
         clf = SVC(random_state=seed, probability=True)
         
@@ -230,14 +231,17 @@ def main():
     print(f'Mean of ROC: {round(np.mean(np.array(best_prediction)[:,0]), 5)}')
     print(f'--- {round(finish_time, 3)} seconds ---')
 
-
     # Writing metrics to output file
     write_evaluation_file(args, best_prediction, best_params, finish_time, all_features, df.shape[1])
     if args.classifier == 'RF' or args.classifier == 'XGB':
         write_fi_file(feature_importance, args.output, df.columns)
     with open(args.output+'_roc.txt', 'w') as fh:
         [fh.write(f'Loop {i[0]}\nFPR\n{i[1]}\nTPR\n{i[2]}\n') for i in roc]
-
-
+    
+    # fit clf on all data, pickle with joblib to export clf 
+    best_clf_fit = best_clf.fit(df, df.index.get_level_values('disease').values)
+    dump(best_clf_fit, args.output+'.joblib', compress=9)
+    
+    
 if __name__ == '__main__':
     main()

@@ -106,6 +106,7 @@ params.keep_phix = false
 // params.phix_reference = "ftp://ftp.ncbi.nlm.nih.gov/genomes/genbank/viral/Enterobacteria_phage_phiX174_sensu_lato/all_assembly_versions/GCA_002596845.1_ASM259684v1/GCA_002596845.1_ASM259684v1_genomic.fna.gz"
 params.phix_reference = "$baseDir/assets/data/GCA_002596845.1_ASM259684v1_genomic.fna.gz"
 
+
 /*
  * taxonomy options
  */
@@ -123,12 +124,14 @@ params.metaphlan_read_min_len = 20
  * ML options
  */
 params.metadata = false
-params.filter_species = false
+params.filter_species = true
+params.filter_genus = false
+params.combine_strain_species = false
 params.seed = 42
 params.loops_validation = 10
 params.loops_tuning = 10
 params.varience_threshold = false
-params.scorer = false
+params.scorer = 'balanced_accuracy'  //false
 params.rf = false
 params.svm = false
 params.xgboost = false
@@ -140,6 +143,13 @@ if(params.rf) { classifier_list.add('RF') }
 if(params.svm) { classifier_list.add('SVM') } 
 if(params.xgboost) { classifier_list.add('XGB') } 
 if(params.l2linear) { classifier_list.add('L2linear') } 
+
+
+/*
+ * Prediction options 
+ */
+params.predict = false
+params.clf = false
 
 /*
  * Check if parameters for host contamination removal are valid and create channels
@@ -589,8 +599,7 @@ if ( !params.skip_centrifuge ) {
 
     process CENTRIFUGE {
         tag "${name}-${db_name}"
-        publishDir "${params.outdir}/Taxonomy/centrifuge/${name}", mode: 'copy',
-                saveAs: {filename -> filename.indexOf(".krona") == -1 ? filename : null}
+        publishDir "${params.outdir}/Taxonomy/centrifuge/${name}", mode: 'copy'
 
         input:
         set val(name), file(reads), val(db_name), file(db) from centrifuge_input
@@ -609,7 +618,6 @@ if ( !params.skip_centrifuge ) {
             -S results.txt \
             $input
         centrifuge-kreport -x "${db_name}" results.txt > kreport.txt
-        cat results.txt | cut -f 1,3 > results.krona
         """
     }
 
@@ -727,7 +735,6 @@ if ( !params.skip_metaphlan) {
 
         output:
         file("*.txt") into ch_metaphlan_report
-        //tuple val(name), path("*.txt") into ch_metaphlan_report
         tuple val(name), file("mapping.bt2") into ch_metaphlan_strain
 
         script:
@@ -773,60 +780,88 @@ process TAXO_REPORT_SUMMARY {
  
     input:
     path meta from params.metadata
-    file mpa from ch_metaphlan_report.collect()
-    file mpa_marker from ch_metaphlan_strain_report.collect()
-    file kraken from ch_kraken_reports.collect()
+    file mpa from ch_metaphlan_report.collect().ifEmpty([])
+    file mpa_marker from ch_metaphlan_strain_report.collect().ifEmpty([])
+    file kraken from ch_kraken_reports.collect().ifEmpty([])
 
     output:
-    file("*.csv") into ch_reports_summary
+    path "*.csv" into ch_reports_summary
 
     script:
     def metaphlan = params.skip_metaphlan ? "" : "--metaphlan \"$mpa\" --mpa_marker \"$mpa_marker\""
     def kraken2 = params.skip_kraken2 ? "" : "--kraken2 \"$kraken\""
-    def species = params.filter_species ? "--species_filter": ""
+    def species = params.filter_species ? "--filter_level species" : ""
+    def genus = params.filter_genus ? "--filter_level genus" : ""
+    def combine = params.combine_strain_species ? "--combine" : ""
+    def metadata = params.metadata ? "--metadata $meta" : ""
     """
     create_summary_tables.py \
-        --metadata $meta \
+        $metadata \
         $species \
         $metaphlan \
+        $combine \
         $kraken2
     """
 }
 
+if(!params.predict) {
+    process MODEL_TRAINING {
+        tag "${filename}-${classifier}"
+        publishDir "${params.outdir}/classification_metrics/${classifier}", mode: 'copy'
+        publishDir "${params.outdir}/classifier", pattern: "*.joblib"
+        
+        input:
+        path report from ch_reports_summary.buffer( size: 1 ).flatten()
+        val seed from params.seed
+        val lv from params.loops_validation
+        val lt from params.loops_tuning
+        val scorer from params.scorer
+        each classifier from classifier_list
+        val vt from params.varience_threshold
 
-process MODEL_TRAINING {
-    tag "${filename}-${classifier}"
-    publishDir "${params.outdir}/classification_metrics/${classifier}", mode: 'copy'
-    input:
-    each file from ch_reports_summary
-    val seed from params.seed
-    val lv from params.loops_validation
-    val lt from params.loops_tuning
-    val scorer from params.scorer
-    each classifier from classifier_list
-    val vt from params.varience_threshold
+        output:
+        file("*")
 
-    output:
-    file("*")
+        script:
+        filename = report.toString().replace("_table.csv", "").tokenize('/')[-1]
+        varience = params.varience_threshold ? "--varience_threshold " + params.varience_threshold : ''
+        """
+        train.py \
+        --input $report \
+        --seed $seed \
+        --threads "${task.cpus}" \
+        --loops_validation $lv \
+        --loops_tuning $lt \
+        --classifier $classifier \
+        --scorer $scorer \
+        $varience \
+        --output ${filename}_${classifier}
+        """
+    }
+} else {
+    ch_clf = Channel.fromPath(params.clf, checkIfExists: true).map{file -> [ file.name.tokenize("_")[0], file ]}
+    ch_reports = ch_reports_summary.buffer( size: 1 ).flatten().map{file -> [ file.name.tokenize("_")[0], file ]}
+    ch_clf.join(ch_reports)
+// table and clf have to fit together!!!
 
-    script:
-    filename = file.toString().replace(".csv", "").tokenize('/')[-1]
-    varience = params.varience_threshold ? "--varience_threshold " + params.varience_threshold : ''
-    """
-    train.py \
-    --input $file \
-    --seed $seed \
-    --threads "${task.cpus}" \
-    --loops_validation $lv \
-    --loops_tuning $lt \
-    --classifier $classifier \
-    --scorer $scorer \
-    $varience \
-    --output ${filename}_${classifier}
-    """
+    process PREDICTION {
+        publishDir "${params.outdir}/prediction", mode: 'copy'
 
+        input:
+        tuple val(name), path(clf), path(report) classifier from ch_clf
+
+        output:
+        file("*_prediction.tsv")
+
+        script:
+        """
+        predict.py \
+        --input $report\
+        --output $name\
+        --classifier $clf
+        """
+    }
 }
-
 
 
 /*

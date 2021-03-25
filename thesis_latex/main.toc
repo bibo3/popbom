@@ -1,0 +1,38 @@
+\boolfalse {citerequest}\boolfalse {citetracker}\boolfalse {pagetracker}\boolfalse {backtracker}\relax 
+\babel@toc {english}{}
+\contentsline {chapter}{Declaration of Authorship}{iii}{section*.1}%
+\contentsline {chapter}{Abstract}{v}{section*.2}%
+\contentsline {chapter}{Acknowledgements}{vii}{section*.3}%
+\contentsline {chapter}{\numberline {1}Introduction}{1}{chapter.7}%
+\contentsline {section}{\numberline {1.1}Metagenomics}{1}{section.8}%
+\contentsline {section}{\numberline {1.2}Machine Learning and Reproducibility}{1}{section.9}%
+\contentsline {section}{\numberline {1.3}Thesis Objective}{1}{section.10}%
+\contentsline {chapter}{\numberline {2}Theoretical Background}{3}{chapter.11}%
+\contentsline {section}{\numberline {2.1}Metagenomics}{3}{section.12}%
+\contentsline {subsection}{\numberline {2.1.1}File formats}{3}{subsection.13}%
+\contentsline {subsection}{\numberline {2.1.2}Preprocessing}{3}{subsection.14}%
+\contentsline {subsection}{\numberline {2.1.3}Taxonomic profiling}{4}{subsection.15}%
+\contentsline {section}{\numberline {2.2}Machine Learning}{4}{section.16}%
+\contentsline {subsection}{\numberline {2.2.1}Support Vector Machines}{5}{subsection.17}%
+\contentsline {subsection}{\numberline {2.2.2}Random Forests}{5}{subsection.18}%
+\contentsline {subsection}{\numberline {2.2.3}Gradient Boosted Trees}{5}{subsection.19}%
+\contentsline {subsection}{\numberline {2.2.4}Evaluation of Machine Learning algorithms}{5}{subsection.20}%
+\contentsline {section}{\numberline {2.3}Workflowmanagers and Reproducibility}{6}{section.21}%
+\contentsline {section}{\numberline {2.4}Previous work}{6}{section.22}%
+\contentsline {chapter}{\numberline {3}Experimental Setup}{7}{chapter.23}%
+\contentsline {section}{\numberline {3.1}Design considerations}{7}{section.24}%
+\contentsline {section}{\numberline {3.2}Pipeline architecture}{7}{section.25}%
+\contentsline {subsection}{\numberline {3.2.1}Preprocessing}{7}{subsection.27}%
+\contentsline {subsection}{\numberline {3.2.2}Taxonomic profiling}{8}{subsection.28}%
+\contentsline {subsection}{\numberline {3.2.3}Training mode}{8}{subsection.29}%
+\contentsline {subsection}{\numberline {3.2.4}Prediction mode}{8}{subsection.31}%
+\contentsline {section}{\numberline {3.3}Datasets}{10}{section.32}%
+\contentsline {chapter}{\numberline {4}Results and Data Analysis}{11}{chapter.34}%
+\contentsline {section}{\numberline {4.1}ML evaluation}{11}{section.35}%
+\contentsline {section}{\numberline {4.2}Performance of taxonomic profilers}{11}{section.36}%
+\contentsline {section}{\numberline {4.3}Influence of taxonomic level}{11}{section.37}%
+\contentsline {section}{\numberline {4.4}Feature selection}{11}{section.38}%
+\contentsline {section}{\numberline {4.5}Runtime measurements}{11}{section.39}%
+\contentsline {chapter}{\numberline {5}Conclusion and Outlook}{13}{chapter.40}%
+\contentsline {section}{\numberline {5.1}Possible Extensions}{13}{section.41}%
+\contentsline {chapter}{Bibliography}{15}{appendix*.42}%

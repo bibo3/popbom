@@ -122,15 +122,31 @@ def main():
     parser.add_argument('--combine', help='combine mpa report on species level with strain report')
     parser.add_argument('--metadata', '-m', help='metadata file')
     parser.add_argument('--filter_level', '-f', help='select level to filter to', choices=['species', 'genus'])
+    parser.add_argument('--species')
+    parser.add_argument('--genus')
     args = parser.parse_args()
     
     if args.metaphlan:
-        df = reading_metaphlan(args.metaphlan, args.metadata, args.filter_level)
-        df.to_csv('metaphlan_table.csv')
+        if args.species:
+            df = reading_metaphlan(args.metaphlan, args.metadata, 'species')
+            df.to_csv('metaphlan_species_table.csv')
+        if args.genus:
+            df = reading_metaphlan(args.metaphlan, args.metadata, 'genus')
+            df.to_csv('metaphlan_genus_table.csv')
+        elif not args.species:
+            df = reading_metaphlan(args.metaphlan, args.metadata, '')
+            df.to_csv('metaphlan_table.csv')
         
     if args.kraken2:
-        df = reading_kraken2(args.kraken2, args.metadata, args.filter_level)
-        df.to_csv('kraken2_table.csv')
+        if args.species:
+            df = reading_kraken2(args.kraken2, args.metadata, 'species')
+            df.to_csv('kraken2_species_table.csv')
+        if args.genus:
+            df = reading_kraken2(args.kraken2, args.metadata, 'genus')
+            df.to_csv('kraken2_genus_table.csv')
+        elif not args.species:
+            df = reading_kraken2(args.kraken2, args.metadata, args.filter_level)
+            df.to_csv('kraken2_table.csv')
         
     if args.mpa_marker:
         df = reading_mpa_marker(args.mpa_marker, args.metadata)

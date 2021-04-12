@@ -30,6 +30,7 @@ def helpMessage() {
       --single_end [bool]             Specifies that the input is single-end reads
 
 
+
     Short read preprocessing:
       --adapter_forward             Sequence of 3' adapter to remove in the forward reads
       --adapter_reverse             Sequence of 3' adapter to remove in the reverse reads
@@ -790,14 +791,15 @@ process TAXO_REPORT_SUMMARY {
     script:
     def metaphlan = params.skip_metaphlan ? "" : "--metaphlan \"$mpa\" --mpa_marker \"$mpa_marker\""
     def kraken2 = params.skip_kraken2 ? "" : "--kraken2 \"$kraken\""
-    def species = params.filter_species ? "--filter_level species" : ""
-    def genus = params.filter_genus ? "--filter_level genus" : ""
+    def species = params.filter_species ? "--species s" : ""
+    def genus = params.filter_genus ? "--genus g" : ""
     def combine = params.combine_strain_species ? "--combine" : ""
     def metadata = params.metadata ? "--metadata $meta" : ""
     """
     create_summary_tables.py \
         $metadata \
         $species \
+        $genus \
         $metaphlan \
         $combine \
         $kraken2
@@ -821,6 +823,7 @@ if(!params.predict) {
 
         output:
         file("*")
+        file("*.txt") into ch_heatmap
 
         script:
         filename = report.toString().replace("_table.csv", "").tokenize('/')[-1]
@@ -838,11 +841,29 @@ if(!params.predict) {
         --output ${filename}_${classifier}
         """
     }
+
+    process HEATMAP_PLOTTING {
+        publishDir "${params.outdir}/classification_heatmap", mode: 'copy'
+
+        input:
+        val dir from ch_heatmap.collect()
+
+        output:
+        file("heatmap_metrics.png")
+
+        script:
+
+        """
+        plot_metric_heatmap.py "$dir"
+        """
+
+    }
+
 } else {
     ch_clf = Channel.fromPath(params.clf, checkIfExists: true).map{file -> [ file.name.tokenize("_")[0], file ]}
     ch_reports = ch_reports_summary.buffer( size: 1 ).flatten().map{file -> [ file.name.tokenize("_")[0], file ]}
     ch_clf.join(ch_reports)
-// table and clf have to fit together!!!
+
 
     process PREDICTION {
         publishDir "${params.outdir}/prediction", mode: 'copy'
@@ -867,7 +888,7 @@ if(!params.predict) {
 /*
  * MultiQC
  */
-
+/*
 process MULTIQC {
     publishDir "${params.outdir}/MultiQC", mode: 'copy'
 
@@ -905,7 +926,7 @@ process MULTIQC {
         """
     }
 }
-
+*/
 
 /*
  * Output Description HTML

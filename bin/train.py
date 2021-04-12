@@ -13,12 +13,13 @@ import argparse
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedShuffleSplit, GridSearchCV
-from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve, matthews_corrcoef, balanced_accuracy_score, make_scorer
+from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve, matthews_corrcoef, balanced_accuracy_score, make_scorer, plot_roc_curve
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
-import xgboost as xgb
 from sklearn.feature_selection import VarianceThreshold
+import xgboost as xgb
+import matplotlib.pyplot as plt
 from joblib import dump
 import time
  
@@ -45,7 +46,7 @@ def parseargs():
 # spliting the datasets into test/train sets
 # returns arrays X_train, X_test, y_train, y_test of length #splits  
 def split_data(df_data, splits, seed_value):
-    sss = StratifiedShuffleSplit(n_splits=splits, test_size=0.2, random_state=seed_value)
+    sss = StratifiedShuffleSplit(n_splits=splits, test_size=0.5, random_state=seed_value)
     X_train, X_test, y_train, y_test = [], [], [], []
     labels = df_data.index.get_level_values('disease').values
     X = np.zeros(len(labels))
@@ -56,6 +57,10 @@ def split_data(df_data, splits, seed_value):
         X_test.append(df_data.iloc[test_index])
     return X_train, X_test, y_train, y_test
 
+# remap mcc result from -1,1 dataspace to 0,1
+def maprange( a, b, s):
+	(a1, a2), (b1, b2) = a, b
+	return  b1 + ((s - a1) * (b2 - b1) / (a2 - a1))
 
 # Evaluation function: auc score, precision, accuracy, recall, f1, mcc, balanced accuracy, tpr, fpr
 def evaluate_performance(y_true, y_pred, y_pred_proba):
@@ -70,12 +75,13 @@ def evaluate_performance(y_true, y_pred, y_pred_proba):
     else:
         precision, recall, f1 = 0.0, 0.0, 0.0
     mcc = matthews_corrcoef(y_true, y_pred)
+    mcc = maprange((-1,1), (0,1), mcc)
     balanced_accuracy = balanced_accuracy_score(y_true, y_pred)
     return [auc, accuracy, precision, recall, f1, mcc, balanced_accuracy, confusion]
 
 
 # perform grid search of model with given param grid (dict of params and values to consider)
-def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, scorer, threads=-1, cv=5):
+def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, scorer, threads=-1, cv=2):
     gs = GridSearchCV(
         estimator=model,
         param_grid=param_grid,
@@ -132,11 +138,18 @@ def write_evaluation_file(args, best_prediction, hyper_params, time, all_feature
 
 
 # report sorted feature importances of rf to csv file
-def write_fi_file(feature_importance, output, df_index):
+def write_fi_file(feature_importance, output, df_index, num_features):
     fi_mean = np.mean(feature_importance, axis=0)
     df_fi = pd.DataFrame(fi_mean, index=df_index, columns=['Feature Importance'])
     df_fi = df_fi.sort_values('Feature Importance', ascending=False)
     df_fi.to_csv(output+'_feature_importance.csv')
+    df_fi = df_fi.head(num_features)
+    fig, ax = plt.subplots(figsize=(12,8))
+    ax.set_title(output)
+    ax.bar(df_fi.index, df_fi['Feature Importance'])
+    plt.xticks(rotation=90)
+    plt.tight_layout()
+    fig.savefig(output+'_feature_importance.png')
 
 
 def main():
@@ -174,8 +187,8 @@ def main():
     # set grid for SVM
     if args.classifier == 'SVM':
         param_grid = {
-            'kernel': ['linear', 'poly'],# 'rbf', 'sigmoid'],
-            'C': [0.25, 0.5, 0.75, 1.0]#, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0]
+            'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
+            'C': [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0, 5.0]
             }
         clf = SVC(random_state=seed, probability=True)
         
@@ -214,27 +227,61 @@ def main():
         best_clf = xgb.XGBClassifier(**best_params, objective='binary:logistic', random_state=seed)
         
     best_prediction, roc = [], []
+    tprs = []
+    aucs = []
+    mean_fpr = np.linspace(0, 1, 100)
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
     # Validation, evaluate performance and plot ROC
     for i in range(loops_validation):
         best_clf.fit(X_train[i], y_train[i])
         proba = best_clf.predict_proba(X_test[i])[:,1]
         pred = best_clf.predict(X_test[i])
         best_prediction.append(evaluate_performance(y_test[i], pred, proba))
+        # ROC plotting
+        viz = plot_roc_curve(best_clf, X_test[i], y_test[i], 
+                             name='ROC fold {}'.format(i), 
+                             alpha=0.3, lw=1, ax=ax)
+        interp_tpr = np.interp(mean_fpr, viz.fpr, viz.tpr)
+        interp_tpr[0] = 0.0
+        tprs.append(interp_tpr)
+        aucs.append(viz.roc_auc)
+        
         fpr, tpr, _ = roc_curve(y_test[i], proba)
         roc.append([i, fpr, tpr])
 
         if args.classifier == 'RF' or args.classifier == 'XGB':
             feature_importance.append(best_clf.feature_importances_)        
-            
+
+    mean_auc = np.mean(np.array(best_prediction)[:,0])
+    # ROC plotting
+    ax.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r',
+            label='Chance', alpha=.8)
+    mean_tpr = np.mean(tprs, axis=0)
+    mean_tpr[-1] = 1.0
+    std_auc = np.std(aucs)
+    ax.plot(mean_fpr, mean_tpr, color='b',
+            label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
+            lw=2, alpha=.8)
+    std_tpr = np.std(tprs, axis=0)
+    tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
+    tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
+    ax.fill_between(mean_fpr, tprs_lower, tprs_upper, color='grey', alpha=.2,
+                    label=r'$\pm$ 1 std. dev.')
+    ax.set(xlim=[-0.05, 1.05], ylim=[-0.05, 1.05],
+           title=f"{args.output}")
+    ax.legend(loc="lower right")
+    plt.savefig(args.output+'_roc.png')
+
     # console output
     finish_time = time.time()-start_time
-    print(f'Mean of ROC: {round(np.mean(np.array(best_prediction)[:,0]), 5)}')
+    print(f'Mean of ROC: {round(mean_auc, 5)}')
     print(f'--- {round(finish_time, 3)} seconds ---')
 
     # Writing metrics to output file
     write_evaluation_file(args, best_prediction, best_params, finish_time, all_features, df.shape[1])
     if args.classifier == 'RF' or args.classifier == 'XGB':
-        write_fi_file(feature_importance, args.output, df.columns)
+        write_fi_file(feature_importance, args.output, df.columns, 10)
     with open(args.output+'_roc.txt', 'w') as fh:
         [fh.write(f'Loop {i[0]}\nFPR\n{i[1]}\nTPR\n{i[2]}\n') for i in roc]
     

@@ -46,7 +46,7 @@ def parseargs():
 # spliting the datasets into test/train sets
 # returns arrays X_train, X_test, y_train, y_test of length #splits  
 def split_data(df_data, splits, seed_value):
-    sss = StratifiedShuffleSplit(n_splits=splits, test_size=0.5, random_state=seed_value)
+    sss = StratifiedShuffleSplit(n_splits=splits, test_size=0.2, random_state=seed_value)
     X_train, X_test, y_train, y_test = [], [], [], []
     labels = df_data.index.get_level_values('disease').values
     X = np.zeros(len(labels))
@@ -81,7 +81,7 @@ def evaluate_performance(y_true, y_pred, y_pred_proba):
 
 
 # perform grid search of model with given param grid (dict of params and values to consider)
-def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, scorer, threads=-1, cv=2):
+def grid_search(X_train_data, X_test_data, y_train_data, model, param_grid, scorer, threads=-1, cv=5):
     gs = GridSearchCV(
         estimator=model,
         param_grid=param_grid,

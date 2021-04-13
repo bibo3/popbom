@@ -133,9 +133,9 @@ def main():
         if args.genus:
             df = reading_metaphlan(args.metaphlan, args.metadata, 'genus')
             df.to_csv('metaphlan_genus_table.csv')
-        elif not args.species:
-            df = reading_metaphlan(args.metaphlan, args.metadata, '')
-            df.to_csv('metaphlan_table.csv')
+            
+        df = reading_metaphlan(args.metaphlan, args.metadata, '')
+        df.to_csv('metaphlan_table.csv')
         
     if args.kraken2:
         if args.species:
@@ -144,9 +144,9 @@ def main():
         if args.genus:
             df = reading_kraken2(args.kraken2, args.metadata, 'genus')
             df.to_csv('kraken2_genus_table.csv')
-        elif not args.species:
-            df = reading_kraken2(args.kraken2, args.metadata, args.filter_level)
-            df.to_csv('kraken2_table.csv')
+
+        df = reading_kraken2(args.kraken2, args.metadata, args.filter_level)
+        df.to_csv('kraken2_table.csv')
         
     if args.mpa_marker:
         df = reading_mpa_marker(args.mpa_marker, args.metadata)

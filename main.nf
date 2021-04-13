@@ -888,7 +888,7 @@ if(!params.predict) {
 /*
  * MultiQC
  */
-/*
+
 process MULTIQC {
     publishDir "${params.outdir}/MultiQC", mode: 'copy'
 
@@ -926,7 +926,7 @@ process MULTIQC {
         """
     }
 }
-*/
+
 
 /*
  * Output Description HTML

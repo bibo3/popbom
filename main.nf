@@ -793,7 +793,7 @@ process TAXO_REPORT_SUMMARY {
     def kraken2 = params.skip_kraken2 ? "" : "--kraken2 \"$kraken\""
     def species = params.filter_species ? "--species s" : ""
     def genus = params.filter_genus ? "--genus g" : ""
-    def combine = params.combine_strain_species ? "--combine" : ""
+    def combine = params.combine_strain_species ? "--combine c" : ""
     def metadata = params.metadata ? "--metadata $meta" : ""
     """
     create_summary_tables.py \

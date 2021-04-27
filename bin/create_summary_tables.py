@@ -46,6 +46,8 @@ def reading_kraken2(basepath, metadata, level):
     else:        
         kraken_total.columns = kraken_total.columns.to_series().apply(lambda x: "".join(str(x)))
         
+    # rename columns for XGBoost
+    kraken_total.columns = kraken_total.columns.to_series().apply(lambda x: "".join(str(x)).replace('[','(').replace(']',')').replace('<','_'))
     return kraken_total.dropna()
 
 

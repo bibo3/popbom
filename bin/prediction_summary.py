@@ -8,13 +8,12 @@ Created on Sat Apr 10 12:38:02 2021
 
 import sys
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 
 def single_df(file):
-    table_name = {'mpa': 'metaphlan_table.csv', 'strain': 'metaphlan_marker_table.csv', 'kraken': 'kraken2_table.csv', 'combined': 'strain_species.csv'}
     with open(file, 'r') as f:
+        table_name = {'mpa': 'metaphlan_table.csv', 'strain': 'metaphlan_marker_table.csv', 'kraken': 'kraken2_table.csv', 'combined': 'strain_species.csv'}
+        phenotype = ['cirrhosis', 'ibd', 'obesity']
         meta_name, meta_val = [], []
         metric_name, metric_val = [], []
         prev = 'not empty'
@@ -26,9 +25,14 @@ def single_df(file):
                 if len(meta) == 2:
                     if meta[0] == 'Input file':
                         meta_name.append('Experiment')
-                        meta_val.append(file.split('/')[-1].replace('.txt', '').replace('_', ' '))
+                        meta_val.append(file.replace('.txt', '').replace('_', ' '))
+                        meta_name.append('dataset')
+                        meta_val.append(''.join([p for p in phenotype if p in meta[1]]))
                         meta_name.append('taxo profiler')
                         meta_val.append(''.join([key for key, value in table_name.items() if value in meta[1]]))
+                        
+                        meta_name.append('subdir name')
+                        meta_val.append(meta[1])
                     else:
                         meta_name.append(meta[0])
                         meta_val.append(meta[1])
@@ -49,21 +53,18 @@ def single_df(file):
                 meta_flag = True
             prev = line
             
-    index = [file.split('/')[-1].replace('.txt', '').replace('_', ' ')]
+    index = pd.MultiIndex.from_tuples([tuple(meta_val)], names=meta_name)
     df = pd.DataFrame([metric_val], columns=metric_name, index=index)
     return df
 
 
 def main():
-    path = sys.argv[1][1:-1].split(', ')
+    path = sys.argv[1]()
     files = [x for x in path if '_roc.txt' not in x]
+    files = [x for x in files if '.txt' in x]
     df = pd.concat([single_df(x) for x in files])
-    df = df.apply(pd.to_numeric)
-    fig, ax = plt.subplots(figsize=(12,8))
-    sns.heatmap(df[['ROC', 'Balanced accuracy', 'Precision', 'Recall', 'F1-Score', 'MCC']], annot=True, cmap="coolwarm", vmin=0, vmax=1, ax=ax)
-    fig.savefig('heatmap_metrics.png')
-
-
+    df.to_csv('prediction_summary.csv')
+    
 
 if __name__ == '__main__':
     main()

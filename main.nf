@@ -822,8 +822,7 @@ if(!params.predict) {
         val vt from params.varience_threshold
 
         output:
-        file("*")
-        file("*.txt") into ch_heatmap
+        file("*") into ch_prediction_summary
 
         script:
         filename = report.toString().replace("_table.csv", "").tokenize('/')[-1]
@@ -842,19 +841,19 @@ if(!params.predict) {
         """
     }
 
-    process HEATMAP_PLOTTING {
-        publishDir "${params.outdir}/classification_heatmap", mode: 'copy'
+    process PREDICTION_SUMMARY {
+        publishDir "${params.outdir}/classification_metrics", mode: 'copy'
 
         input:
-        val dir from ch_heatmap.collect()
+        file metrics from ch_prediction_summary.collect()
 
         output:
-        file("heatmap_metrics.png")
+        file("predcition_summary.csv")
 
         script:
 
         """
-        plot_metric_heatmap.py "$dir"
+        prediction_summary.py "$metrics"
         """
 
     }

@@ -57,10 +57,6 @@ def split_data(df_data, splits, seed_value):
         X_test.append(df_data.iloc[test_index])
     return X_train, X_test, y_train, y_test
 
-# remap mcc result from -1,1 dataspace to 0,1
-def maprange( a, b, s):
-	(a1, a2), (b1, b2) = a, b
-	return  b1 + ((s - a1) * (b2 - b1) / (a2 - a1))
 
 # Evaluation function: auc score, precision, accuracy, recall, f1, mcc, balanced accuracy, tpr, fpr
 def evaluate_performance(y_true, y_pred, y_pred_proba):
@@ -75,7 +71,6 @@ def evaluate_performance(y_true, y_pred, y_pred_proba):
     else:
         precision, recall, f1 = 0.0, 0.0, 0.0
     mcc = matthews_corrcoef(y_true, y_pred)
-    mcc = maprange((-1,1), (0,1), mcc)
     balanced_accuracy = balanced_accuracy_score(y_true, y_pred)
     return [auc, accuracy, precision, recall, f1, mcc, balanced_accuracy, confusion]
 
